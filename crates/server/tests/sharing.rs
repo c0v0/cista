@@ -457,3 +457,74 @@ async fn tokens_never_appear_in_responses() {
     assert_eq!(status, StatusCode::OK);
     assert!(!String::from_utf8_lossy(&body).contains(&token));
 }
+
+#[tokio::test]
+async fn workspace_file_list_is_paginated_and_capped() {
+    let app = TestApp::new().await;
+    let device = app.enroll("desktop").await;
+    let workspace = app.create_workspace(&device, "分页工作区").await;
+    let (request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Off,
+        FilesMode::Rw,
+    );
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        let (status, body) = upload(&app, &token, name, "text/plain", b"x", None).await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    let (status, body) = app
+        .send(app.public("GET", "/public/workspaces/files?limit=2", &token, b"", &[]))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let first: PublicFileList = TestApp::json(&body);
+    assert_eq!(first.files.len(), 2, "一页最多 limit 条");
+    assert_eq!(first.next_offset, Some(2));
+
+    let (status, body) = app
+        .send(app.public(
+            "GET",
+            "/public/workspaces/files?limit=2&offset=2",
+            &token,
+            b"",
+            &[],
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let second: PublicFileList = TestApp::json(&body);
+    assert_eq!(second.files.len(), 1);
+    assert_eq!(second.next_offset, None, "最后一页不带 next_offset");
+
+    let mut names: Vec<String> = first
+        .files
+        .iter()
+        .chain(second.files.iter())
+        .map(|entry| entry.name.clone())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["a.txt", "b.txt", "c.txt"]);
+
+    // 上限钳制：limit 超过 PAGE_MAX 不报错，也不会返回超过总数的条目。
+    let (status, body) = app
+        .send(app.public(
+            "GET",
+            "/public/workspaces/files?limit=100000",
+            &token,
+            b"",
+            &[],
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(TestApp::json::<PublicFileList>(&body).files.len(), 3);
+}

@@ -51,7 +51,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
           target.kind === "workspace" &&
           filePermissions(loaded.file_scopes).canRead
         ) {
-          setFiles(await client.listFiles());
+          setFiles(await client.listAllFiles());
         }
       } catch (cause) {
         setError(describeShareError(cause));
@@ -106,7 +106,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
         passphrase: passphrase || undefined,
       });
       await client.upload(file.name, file, file.type || "application/octet-stream");
-      setFiles(await client.listFiles());
+      setFiles(await client.listAllFiles());
     } catch (cause) {
       setError(describeShareError(cause));
     } finally {

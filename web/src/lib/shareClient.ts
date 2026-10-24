@@ -139,11 +139,27 @@ export function parseFileEntry(raw: unknown): PublicFileEntry {
   };
 }
 
-function parseFileList(raw: unknown): PublicFileEntry[] {
+export interface FileListPage {
+  files: PublicFileEntry[];
+  nextOffset: number | null;
+}
+
+function parseFileList(raw: unknown): FileListPage {
   const record = requireRecord(raw, "文件列表响应");
   const files = record["files"];
   if (!Array.isArray(files)) throw new Error("响应字段 files 不是数组");
-  return files.map(parseFileEntry);
+  const next = record["next_offset"];
+  if (
+    next !== undefined &&
+    next !== null &&
+    (typeof next !== "number" || !Number.isFinite(next))
+  ) {
+    throw new Error("响应字段 next_offset 不是数字");
+  }
+  return {
+    files: files.map(parseFileEntry),
+    nextOffset: typeof next === "number" ? next : null,
+  };
 }
 
 function readErrorCode(body: unknown): string {
@@ -209,9 +225,23 @@ export class ShareClient {
     return await response.blob();
   }
 
-  async listFiles(): Promise<PublicFileEntry[]> {
-    const response = await this.request("/public/workspaces/files");
+  async listFiles(offset = 0): Promise<FileListPage> {
+    const response = await this.request(
+      `/public/workspaces/files?offset=${encodeURIComponent(offset)}`,
+    );
     return parseFileList(await response.json());
+  }
+
+  /** 按服务端 `next_offset` 拉完全部页（`maxPages` 防服务端异常导致死循环）。 */
+  async listAllFiles(maxPages = 20): Promise<PublicFileEntry[]> {
+    const all: PublicFileEntry[] = [];
+    let offset: number | null = 0;
+    for (let page = 0; page < maxPages && offset !== null; page += 1) {
+      const result = await this.listFiles(offset);
+      all.push(...result.files);
+      offset = result.nextOffset;
+    }
+    return all;
   }
 
   async upload(name: string, body: Blob, contentType: string): Promise<PublicFileEntry> {

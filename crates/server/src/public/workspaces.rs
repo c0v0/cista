@@ -4,12 +4,12 @@
 //! token 走 `Authorization: Share <token>` 头，不在 URL 里。
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::Response;
 use axum::Json;
-use cista_core::protocol::{PublicFileEntry, PublicFileList, PublicMeta};
+use cista_core::protocol::{PublicFileEntry, PublicFileList, PublicMeta, PAGE_DEFAULT, PAGE_MAX};
 use cista_core::share::{
     can_manage_files, can_read_files, can_upload, is_allowed_mime, sanitize_file_name, ShareKind,
 };
@@ -44,10 +44,19 @@ pub async fn meta(
     }))
 }
 
-/// `GET /public/workspaces/files`
+#[derive(Debug, Deserialize)]
+pub struct FilesQuery {
+    /// 一页多少条：缺省 `PAGE_DEFAULT`，超过 `PAGE_MAX` 时钳制。
+    pub limit: Option<u64>,
+    /// 从第几条开始（按 `created_at, id` 排序）。
+    pub offset: Option<u64>,
+}
+
+/// `GET /public/workspaces/files?limit=&offset=`
 pub async fn files(
     State(state): State<AppState>,
     ShareToken(token): ShareToken,
+    Query(query): Query<FilesQuery>,
     headers: HeaderMap,
 ) -> Result<Json<PublicFileList>, AppError> {
     let link = load_link(&state, &token, ShareKind::Workspace).await?;
@@ -59,26 +68,43 @@ pub async fn files(
         return Err(AppError::Forbidden);
     }
 
+    // 分页硬上限（`phase6-hardening.md` §1）：默认 50、最大 200，越界钳制而不是 400。
+    let limit = query.limit.unwrap_or(PAGE_DEFAULT).clamp(1, PAGE_MAX);
+    let offset = query.offset.unwrap_or(0);
+    let fetch = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
     let rows: Vec<(String, String, i64, String, i64, i64)> = sqlx::query_as(
         "SELECT id, name, size, mime, rev, created_at FROM workspace_files
-         WHERE workspace_id = ? AND deleted_at IS NULL ORDER BY created_at ASC",
+         WHERE workspace_id = ? AND deleted_at IS NULL
+         ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?",
     )
     .bind(&link.object_id)
+    .bind(fetch)
+    .bind(i64::try_from(offset).unwrap_or(i64::MAX))
     .fetch_all(state.shared.pool())
     .await?;
 
+    let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
+    let has_more = rows.len() > page_size;
+    let files = rows
+        .into_iter()
+        .take(page_size)
+        .map(|(id, name, size, mime, rev, created_at)| PublicFileEntry {
+            id,
+            name,
+            size: u64::try_from(size).unwrap_or(0),
+            mime,
+            rev: u64::try_from(rev).unwrap_or(0),
+            created_at,
+        })
+        .collect();
+
     Ok(Json(PublicFileList {
-        files: rows
-            .into_iter()
-            .map(|(id, name, size, mime, rev, created_at)| PublicFileEntry {
-                id,
-                name,
-                size: u64::try_from(size).unwrap_or(0),
-                mime,
-                rev: u64::try_from(rev).unwrap_or(0),
-                created_at,
-            })
-            .collect(),
+        files,
+        next_offset: if has_more {
+            Some(offset.saturating_add(limit))
+        } else {
+            None
+        },
     }))
 }
 

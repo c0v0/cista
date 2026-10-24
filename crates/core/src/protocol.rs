@@ -235,6 +235,9 @@ pub struct PublicFileEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicFileList {
     pub files: Vec<PublicFileEntry>,
+    /// 下一页的 `offset`；`None` 表示已到末尾（`PAGE_DEFAULT`/`PAGE_MAX` 见上）。
+    #[serde(default)]
+    pub next_offset: Option<u64>,
 }
 
 #[cfg(test)]

@@ -136,4 +136,37 @@ describe("ShareClient", () => {
     expect(call?.url).toBe("/public/files/blob?ticket=ticket%20abc");
     expect(call?.url.includes(TOKEN)).toBe(false);
   });
+
+  it("按 next_offset 拉完所有页后停止", async () => {
+    const entry = (id: string) => ({
+      id,
+      name: `${id}.txt`,
+      size: 1,
+      mime: "text/plain",
+      rev: 1,
+      created_at: 1,
+    });
+    const pages: Record<string, unknown> = {
+      "0": { files: [entry("f1")], next_offset: 1 },
+      "1": { files: [entry("f2")], next_offset: null },
+    };
+    const { transport, calls } = recordingTransport((call) => {
+      const offset = new URL(call.url, "http://x").searchParams.get("offset") ?? "0";
+      return jsonResponse(200, pages[offset]);
+    });
+    const client = new ShareClient(transport, TOKEN);
+    const files = await client.listAllFiles();
+    expect(files.map((file) => file.id)).toEqual(["f1", "f2"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toContain("offset=0");
+    expect(calls[1]?.url).toContain("offset=1");
+  });
+
+  it("拒绝非数字的 next_offset", async () => {
+    const { transport } = recordingTransport(() =>
+      jsonResponse(200, { files: [], next_offset: "2" }),
+    );
+    const client = new ShareClient(transport, TOKEN);
+    await expect(client.listFiles()).rejects.toThrow(/next_offset/);
+  });
 });
