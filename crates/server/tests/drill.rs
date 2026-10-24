@@ -40,12 +40,9 @@ impl Drill {
         let private = PrivateStore::connect(&dir.join("private.db"))
             .await
             .expect("private db");
-        let shared = SharedStore::connect(
-            &dir.join("shared.db"),
-            dir.join("blobs").join("shared"),
-        )
-        .await
-        .expect("shared db");
+        let shared = SharedStore::connect(&dir.join("shared.db"), dir.join("blobs").join("shared"))
+            .await
+            .expect("shared db");
         let state = AppState::new(config, private, shared);
         Self {
             router: cista_server::app(state),
@@ -53,7 +50,12 @@ impl Drill {
     }
 
     async fn send(&self, request: Request<Body>) -> (StatusCode, Vec<u8>) {
-        let response = self.router.clone().oneshot(request).await.expect("response");
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("response");
         let status = response.status();
         let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
             .await
@@ -152,7 +154,14 @@ async fn seed() {
     let (request, token) = link_request(ShareKind::File, &blob.hash, NoteMode::Off, FilesMode::Ro);
     let body = serde_json::to_vec(&request).expect("link json");
     let (status, bytes) = drill
-        .send(signed_request(&device, "POST", "/api/share", &body, &fresh_nonce(), now_ts()))
+        .send(signed_request(
+            &device,
+            "POST",
+            "/api/share",
+            &body,
+            &fresh_nonce(),
+            now_ts(),
+        ))
         .await;
     assert_eq!(
         status,
@@ -177,7 +186,14 @@ async fn verify() {
 
     // 1) 私有笔记：用 MK 解出原明文。
     let (status, bytes) = drill
-        .send(signed_request(&device, "GET", "/api/notes/drill-note", b"", &fresh_nonce(), now_ts()))
+        .send(signed_request(
+            &device,
+            "GET",
+            "/api/notes/drill-note",
+            b"",
+            &fresh_nonce(),
+            now_ts(),
+        ))
         .await;
     assert_eq!(
         status,

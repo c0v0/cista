@@ -20,6 +20,8 @@ pub struct Config {
     pub rate_per_minute: u32,
     /// 桶容量：允许的突发请求数。
     pub rate_burst: u32,
+    /// 跨域部署时的前端 origin（`design.md` §4.2）；为空表示只接受同源。
+    pub cors_origin: Option<String>,
     pub log_json: bool,
 }
 
@@ -80,6 +82,11 @@ impl Config {
             .unwrap_or(rate_per_minute / 2)
             .max(1);
 
+        let cors_origin = std::env::var("CISTA_CORS_ORIGIN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
         let log_json = std::env::var("CISTA_LOG_FORMAT")
             .map(|v| v != "pretty")
             .unwrap_or(true);
@@ -94,6 +101,7 @@ impl Config {
             link_quota_bytes,
             rate_per_minute,
             rate_burst,
+            cors_origin,
             log_json,
         })
     }
@@ -110,6 +118,7 @@ impl Config {
             link_quota_bytes: MIB,
             rate_per_minute: 240,
             rate_burst: 120,
+            cors_origin: None,
             log_json: false,
         }
     }

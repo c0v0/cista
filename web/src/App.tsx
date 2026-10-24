@@ -1,26 +1,39 @@
+import { useEffect, useState } from "react";
+
 import { resolveApiBase } from "./lib/apiBase";
 import { parseShareFragment } from "./lib/shareLink";
+import { SharePage } from "./pages/SharePage";
 
 /**
  * SPA 外壳（desktop 与 web 共用）。
  * 私有内容服务端不可读；共享内容服务端可读——这条边界必须出现在 UI 上。
+ *
+ * 分享链接是 fragment 路由（`#/s/<token>`、`#/w/<token>`）：token 不进 query、
+ * 不进 Referer、不被服务端日志记录。
  */
 export function App() {
+  const [hash, setHash] = useState(() => window.location.hash);
+
+  useEffect(() => {
+    const onChange = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+
   const apiBase = resolveApiBase(import.meta.env.VITE_API_BASE);
-  const target = parseShareFragment(window.location.hash);
+  const target = parseShareFragment(hash);
 
   return (
     <main>
-      <h1>Cista</h1>
       {target ? (
-        <p>
-          分享链接（{target.kind}）：token 已从 fragment 读取（{target.token.length} 字符），
-          只作为 `Authorization: Share` header 发送。
-        </p>
+        <SharePage target={target} />
       ) : (
-        <p>私有笔记端到端加密：服务端只存密文。共享内容服务端可读。</p>
+        <>
+          <h1>Cista</h1>
+          <p>私有笔记端到端加密：服务端只存密文。共享内容服务端可读。</p>
+        </>
       )}
-      <p>API base：{apiBase === "" ? "同源" : apiBase}</p>
+      <footer>API：{apiBase === "" ? "同源" : apiBase}</footer>
     </main>
   );
 }

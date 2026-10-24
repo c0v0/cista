@@ -26,6 +26,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::state::AppState;
 
@@ -84,7 +85,7 @@ pub fn app(state: AppState) -> Router {
         .route("/public/workspaces/events", get(public::workspaces::events))
         .route("/ws", get(ws::handler));
 
-    Router::<AppState>::new()
+    let router = Router::<AppState>::new()
         .route("/healthz", get(api::health::healthz))
         .route(
             "/api/devices/enroll",
@@ -93,5 +94,49 @@ pub fn app(state: AppState) -> Router {
         .merge(signed)
         .merge(public)
         .fallback(api::not_found)
-        .with_state(state)
+        .with_state(state.clone());
+
+    if let Some(origin) = state.cfg.cors_origin.clone() {
+        match cors_layer(&origin) {
+            Some(cors) => return router.layer(cors),
+            None => tracing::warn!("CISTA_CORS_ORIGIN 不是合法 origin，已忽略"),
+        }
+    }
+    router
+}
+
+/// 跨域部署（`design.md` §4.2）：只放行配置的前端 origin。
+///
+/// 凭据全部走显式请求头（B+ 签名 / Share token / 口令），不使用 cookie，
+/// 所以不开 allow-credentials。
+fn cors_layer(origin: &str) -> Option<CorsLayer> {
+    use axum::http::{header, HeaderName, HeaderValue, Method};
+    use std::time::Duration;
+
+    let allowed = HeaderValue::from_str(origin).ok()?;
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::exact(allowed))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+            ])
+            .allow_headers([
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                header::IF_MATCH,
+                HeaderName::from_static("idempotency-key"),
+                HeaderName::from_static("x-share-passphrase"),
+                HeaderName::from_static("x-file-name"),
+                HeaderName::from_static("x-device-id"),
+                HeaderName::from_static("x-nonce"),
+                HeaderName::from_static("x-timestamp"),
+                HeaderName::from_static("x-signature"),
+            ])
+            .expose_headers([header::RETRY_AFTER, header::ETAG])
+            .max_age(Duration::from_secs(600)),
+    )
 }
