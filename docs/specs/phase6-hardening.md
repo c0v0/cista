@@ -35,6 +35,8 @@
 - 允许：`token_fingerprint`（`sha256:` + 前 8 位）、IP 的 HMAC 截断。
 - 轮转约 30 天（journald 侧配置）；不建审计表。
 - 测试：`tests/logging.rs` 用捕获层断言响应/日志不含 token、passphrase、笔记正文标记。
+  **已实现**：`crates/server/tests/logging.rs`（自定义 `MakeWriter` 捕获全部 tracing 输出，
+  断言 token、口令、错口令、笔记标记均不出现，且捕获层确实收到日志）。
 
 ## 3. 每端点鉴权矩阵（必须全部有测试）
 
