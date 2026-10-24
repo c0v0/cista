@@ -121,13 +121,25 @@ pub fn note_aad(note_id: &str, rev: u64) -> Vec<u8> {
 
 /// 用给定密钥加密明文。
 pub fn seal(key: &Key, aad: &[u8], plaintext: &[u8]) -> Result<Sealed, CryptoError> {
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| CryptoError::KeyLength)?;
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce).map_err(|_| CryptoError::Random)?;
+    seal_with_nonce(key, aad, plaintext, &nonce)
+}
+
+/// 用**指定** nonce 加密：只用于测试向量与跨语言 KAT。
+///
+/// 生产路径必须走 [`seal`]（每次新随机 nonce）；同 key 复用 nonce 会毁掉 AEAD 安全性。
+pub fn seal_with_nonce(
+    key: &Key,
+    aad: &[u8],
+    plaintext: &[u8],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Sealed, CryptoError> {
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key.as_bytes()).map_err(|_| CryptoError::KeyLength)?;
     let ct = cipher
         .encrypt(
-            &XNonce::from(nonce),
+            &XNonce::from(*nonce),
             Payload {
                 msg: plaintext,
                 aad,
