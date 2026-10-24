@@ -33,7 +33,7 @@ export function App() {
       {target ? <SharePage target={target} /> : null}
       {!target && wantsApp
         ? session
-          ? <NotesPage session={session} />
+          ? <NotesPage session={session} onLock={() => setSession(null)} />
           : <PairPage apiBase={apiBase} onPaired={setSession} />
         : null}
       {!target && !wantsApp ? (

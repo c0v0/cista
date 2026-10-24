@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { desktopSecretStore } from "../lib/native";
 import { decryptNote, listNotes, newNoteId, saveNote } from "../lib/notesApi";
 import type { Session } from "../lib/notesApi";
 import { ApiError } from "../lib/notesApi";
+import { forgetRememberedDevice } from "../lib/rememberedDevice";
 import { RecoveryCodePanel } from "./PairPage";
 
 interface NoteSummary {
@@ -15,7 +17,13 @@ interface NoteSummary {
  * 笔记页（桌面与 Web 共用）：列表只解出标题，正文按需解密。
  * 保存失败（409）不覆盖服务端内容，只提示并刷新。
  */
-export function NotesPage({ session }: { session: Session }) {
+export function NotesPage({
+  session,
+  onLock,
+}: {
+  session: Session;
+  onLock?: () => void;
+}) {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [current, setCurrent] = useState<{ id: string; rev: number } | null>(null);
   const [title, setTitle] = useState("");
@@ -114,6 +122,18 @@ export function NotesPage({ session }: { session: Session }) {
         设备 {session.device.id} · 端到端加密（服务端只存密文）
       </p>
       <RecoveryCodePanel mk={session.mk} />
+      <div className="toolbar">
+        <button
+          type="button"
+          onClick={() => {
+            const store = desktopSecretStore();
+            if (store) void forgetRememberedDevice(store);
+            onLock?.();
+          }}
+        >
+          锁定并清除本机记录
+        </button>
+      </div>
 
       <div className="toolbar">
         <button type="button" onClick={create}>
