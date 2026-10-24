@@ -9,6 +9,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// 一次性 bootstrap token：首台设备入网用；为空表示已关闭。
     pub bootstrap_token: Option<String>,
+    /// 共享 blob 静态加密密钥（32 字节）；为空表示明文落盘（仅测试/开发）。
+    pub static_key: Option<[u8; 32]>,
     pub max_file_bytes: u64,
     /// 实例配额（设计：0.80 × 卷容量，部署时用 df 算出后写进环境变量）。
     pub instance_quota_bytes: u64,
@@ -67,6 +69,19 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
+        // 共享 blob 静态加密：32 字节 hex；非法值直接拒绝启动，避免静默降级为明文。
+        let static_key = match std::env::var("CISTA_STATIC_KEY") {
+            Ok(raw) if !raw.trim().is_empty() => {
+                let bytes = hex::decode(raw.trim())
+                    .map_err(|_| ConfigError::Invalid("CISTA_STATIC_KEY"))?;
+                Some(
+                    <[u8; 32]>::try_from(bytes.as_slice())
+                        .map_err(|_| ConfigError::Invalid("CISTA_STATIC_KEY"))?,
+                )
+            }
+            _ => None,
+        };
+
         let max_file_bytes = parse_u64("CISTA_MAX_FILE_BYTES").unwrap_or(100 * MIB);
         let instance_quota_bytes =
             parse_u64("CISTA_INSTANCE_QUOTA_BYTES").unwrap_or(8 * 1024 * MIB);
@@ -95,6 +110,7 @@ impl Config {
             bind,
             data_dir,
             bootstrap_token,
+            static_key,
             max_file_bytes,
             instance_quota_bytes,
             workspace_quota_bytes,
@@ -112,6 +128,7 @@ impl Config {
             bind: "127.0.0.1:0".parse().expect("bind"),
             data_dir,
             bootstrap_token: None,
+            static_key: None,
             max_file_bytes: MIB,
             instance_quota_bytes: 4 * MIB,
             workspace_quota_bytes: 2 * MIB,

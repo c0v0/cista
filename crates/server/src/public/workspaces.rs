@@ -145,7 +145,13 @@ pub async fn upload(
     let temp_path = state
         .shared
         .blob_path(&format!(".upload-{}", crate::ids::new_id("up")));
-    let (size, blob_hash) = spool_upload(body, &temp_path, state.cfg.max_file_bytes).await?;
+    let (size, blob_hash) = spool_upload(
+        body,
+        &temp_path,
+        state.cfg.max_file_bytes,
+        state.cfg.static_key.as_ref(),
+    )
+    .await?;
     if size == 0 {
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(AppError::BadRequest("empty_file"));
@@ -232,13 +238,20 @@ async fn spool_upload(
     body: Body,
     path: &std::path::Path,
     limit: u64,
+    static_key: Option<&[u8; 32]>,
 ) -> Result<(u64, String), AppError> {
     use tokio::io::AsyncWriteExt;
 
     let mut file = tokio::fs::File::create(path).await?;
+    if static_key.is_some() {
+        file.write_all(crate::blob_crypto::MAGIC).await?;
+    }
     let mut hasher = Sha256::new();
     let mut size: u64 = 0;
     let mut stream = body.into_data_stream();
+    let mut pending: Vec<u8> = Vec::with_capacity(crate::blob_crypto::CHUNK);
+    let mut chunk_index: u32 = 0;
+
     let outcome: Result<(), AppError> = async {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|_| AppError::BadRequest("broken_body"))?;
@@ -247,7 +260,28 @@ async fn spool_upload(
                 return Err(AppError::PayloadTooLarge);
             }
             hasher.update(&chunk);
-            file.write_all(&chunk).await?;
+            pending.extend_from_slice(&chunk);
+            while pending.len() >= crate::blob_crypto::CHUNK {
+                let tail = pending.split_off(crate::blob_crypto::CHUNK);
+                match static_key {
+                    Some(key) => {
+                        let frame = crate::blob_crypto::seal_chunk(key, chunk_index, &pending)?;
+                        file.write_all(&frame).await?;
+                    }
+                    None => file.write_all(&pending).await?,
+                }
+                pending = tail;
+                chunk_index += 1;
+            }
+        }
+        if !pending.is_empty() {
+            match static_key {
+                Some(key) => {
+                    let frame = crate::blob_crypto::seal_chunk(key, chunk_index, &pending)?;
+                    file.write_all(&frame).await?;
+                }
+                None => file.write_all(&pending).await?,
+            }
         }
         file.flush().await?;
         Ok(())

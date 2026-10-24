@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod blob_crypto;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -22,7 +23,7 @@ pub mod wire;
 pub mod ws;
 pub mod yjs;
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
 use axum::middleware;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
@@ -96,6 +97,9 @@ pub fn app(state: AppState) -> Router {
         .fallback(api::not_found)
         .with_state(state.clone());
 
+    // 每 IP 桶在最外层（CORS 之下）：未认证洪泛也会被限速。
+    let router = router.layer(middleware::from_fn_with_state(state.clone(), ip_limit));
+
     if let Some(origin) = state.cfg.cors_origin.clone() {
         match cors_layer(&origin) {
             Some(cors) => return router.layer(cors),
@@ -103,6 +107,34 @@ pub fn app(state: AppState) -> Router {
         }
     }
     router
+}
+
+/// 每 IP 令牌桶；拿不到对端地址时落到 `ip:unknown`（单实例内共用一个桶）。
+///
+/// `/healthz` 不计数：探活与 uptime 监控不应挤占访问额度。
+async fn ip_limit(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Result<axum::response::Response, crate::error::AppError> {
+    if request.uri().path() == "/healthz" {
+        return Ok(next.run(request).await);
+    }
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.ip().to_string());
+    let key = match peer {
+        Some(ip) => format!("ip:{ip}"),
+        None => "ip:unknown".to_string(),
+    };
+    state
+        .rate
+        .check(&key, crate::state::now())
+        .map_err(|limited| crate::error::AppError::RateLimited {
+            retry_after_secs: limited.retry_after_secs,
+        })?;
+    Ok(next.run(request).await)
 }
 
 /// 跨域部署（`design.md` §4.2）：只放行配置的前端 origin。

@@ -10,12 +10,12 @@
 
 | 阶段 | 内容 | 证据 |
 |---|---|---|
-| Phase 0 | 工作区、CI 草案、ADR 0001–0007、Phase 规格、门禁脚本 | 仓库结构 |
+| Phase 0 | 工作区、CI 草案、ADR 0001–0009、Phase 规格、门禁脚本 | 仓库结构 |
 | Phase 1 | `cista-core` 加密/签名/同步状态机、双库、笔记 CRUD + 增量同步、B+ 中间件 | core 37 + notes 8 + authz 10 + healthz 3 |
-| Phase 2 | 分享链接（file/workspace/口令/次数/过期）、两步下载票据、410、配额、共享库隔离 | sharing 14 项 |
+| Phase 2 | 分享链接（file/workspace/口令/次数/过期）、两步下载票据、410、配额、共享库隔离、共享 blob 静态加密 | sharing 16 项 |
 | Phase 3 | Yjs 文档、快照 + 尾部持久化、`/ws` 握手（分享/所有者）、只读丢弃 | yjs 7 项 + ws_e2e 1 项 |
 | Phase 5（部分） | 归档/隔离区、恢复演练（restic 实跑）、`cista-server gc` | drill 记录、gc 1 项 |
-| Phase 6（部分） | 设备/链接限速（429 + `Retry-After`）、分页硬上限（默认 50/最大 200 + `next_offset`）、共享上传流式写入+硬截断、日志脱敏测试、依赖策略、CORS 白名单 | ratelimit 2 + sharing 14 + logging 1 + cors 3 + deny ok |
+| Phase 6（部分） | IP/设备/链接限速 + 认证失败退避、分页硬上限、共享上传流式写入、日志脱敏、依赖策略、CORS | ratelimit 4 + sharing 16 + logging 1 + cors 3 + deny ok |
 | Web/桌面 SPA | 访客分享页、分享客户端、本地搜索索引；**配对 + 笔记编辑器**（B+ 签名、MK/CK 端到端、MK 仅内存） | web 58 项（含 KAT 互操作）+ 真服务端 e2e + vite build |
 | 门禁 | `./scripts/verify.sh`（web build → rustfmt → clippy → test → deny → web tests） | 脚本即协议 |
 
@@ -27,9 +27,10 @@
   发布检查该项保持未通过。
 - **桌面/移动原生能力**：文件选择器、系统钥匙串（Keychain/Keystore）接入未做；
   当前 Web/桌面 SPA 的 MK 与设备私钥只在内存，刷新即锁定。
-- **Phase 6 剩余**：每 IP 限速（需确定可信反代头）、认证失败指数退避、外部安全评审。
+- **Phase 6 剩余**：外部安全评审（未通过不开放公网分享）、私有 blob 计入实例配额、
+  `drop` 更严额度、反向代理侧全局限速。
 
-测试规模：Rust **104 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+测试规模：Rust **114 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
 Web **58 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
 
 ## 快速开始
@@ -50,6 +51,13 @@ cargo run -p cista-server       # 默认 127.0.0.1:8787，数据在 ./data
   由 `deploy/cista-backup.{service,timer}` 每日触发；失败进 journal。
 - 恢复演练：`scripts/restore-drill.sh <空目录>`，记录模板见 `docs/specs/restore-drill-log.md`；
   人工部分（MK 解密一条笔记）必须补上。
+- 共享 blob 静态加密：生产必须设置 `CISTA_STATIC_KEY`（32 字节 hex，与其它钥匙分开托管）；
+  未设置时共享文件明文落盘，仅适合开发/测试（见 ADR 0009）。
+- 升级 / 回滚：
+  - 升级：停服务 → 备份 → 换二进制（`systemctl stop cista` → 替换 `/usr/local/bin/cista-server`
+    → `systemctl start cista`），迁移在启动时前向执行。
+  - 回滚：换回上一版二进制 **并** 恢复升级前的备份（迁移只前向，回滚以数据恢复为准）。
+  - 版本与变更见 `CHANGELOG.md`。
 - 可用性：外部 uptime 每 5 分钟打 `/healthz`。
 - **告警接收人 = 所有者本人：`owner@example.invalid`（部署时改成真实邮箱/手机）。**
   没有 uptime 告警之前，不开放公网分享。

@@ -35,8 +35,12 @@ async fn main() -> anyhow::Result<()> {
         "cista-server listening"
     );
 
-    let server = axum::serve(listener, app(AppState::new(config, private, shared)))
-        .with_graceful_shutdown(shutdown_signal());
+    let server = axum::serve(
+        listener,
+        app(AppState::new(config, private, shared))
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
     server.await?;
     Ok(())
 }

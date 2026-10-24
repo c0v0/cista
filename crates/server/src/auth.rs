@@ -101,7 +101,24 @@ pub async fn require_signed(
     let bytes = to_bytes(body, MAX_SIGNED_BODY)
         .await
         .map_err(|_| AppError::PayloadTooLarge)?;
-    let device = verify_headers(&state, &parts.headers, &parts.method, &parts.uri, &bytes).await?;
+
+    // 连续失败会指数退避：伪造签名/重放不能无限重试。
+    let now_ts = now();
+    let failure_key = failure_key(&parts.headers);
+    if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
+        return Err(AppError::RateLimited { retry_after_secs });
+    }
+    let device =
+        match verify_headers(&state, &parts.headers, &parts.method, &parts.uri, &bytes).await {
+            Ok(device) => {
+                state.failures.clear(&failure_key);
+                device
+            }
+            Err(error) => {
+                state.failures.record(&failure_key, now_ts);
+                return Err(error);
+            }
+        };
 
     // 验签通过后按设备限速：伪造设备 id 的请求进不了桶。
     state
@@ -114,4 +131,14 @@ pub async fn require_signed(
     let mut request = Request::from_parts(parts, Body::from(bytes));
     request.extensions_mut().insert(device);
     Ok(next.run(request).await)
+}
+
+/// 失败计数的 key：优先设备 id（只接受 64 位以内 hex），否则匿名桶。
+fn failure_key(headers: &HeaderMap) -> String {
+    headers
+        .get(H_DEVICE)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .map(|id| format!("dev:{id}"))
+        .unwrap_or_else(|| "dev:anonymous".to_string())
 }

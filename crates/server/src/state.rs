@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 
 use crate::config::{Config, Quotas};
 use crate::db::{PrivateStore, SharedStore};
-use crate::rate_limit::{RateConfig, RateLimiter};
+use crate::rate_limit::{FailureTracker, RateConfig, RateLimiter};
 use crate::yjs::Documents;
 
 #[derive(Clone)]
@@ -25,6 +25,7 @@ pub struct AppState {
     pub ws_events: Arc<FrameBus>,
     pub documents: Arc<Documents>,
     pub rate: Arc<RateLimiter>,
+    pub failures: Arc<FailureTracker>,
 }
 
 impl AppState {
@@ -42,6 +43,7 @@ impl AppState {
             ws_events: Arc::new(FrameBus::default()),
             documents: Arc::new(Documents::new()),
             rate: Arc::new(rate),
+            failures: Arc::new(FailureTracker::new(5, 300)),
         }
     }
 

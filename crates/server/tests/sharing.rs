@@ -575,3 +575,85 @@ async fn upload_streams_and_rejects_oversize_without_leftovers() {
         String::from_utf8_lossy(&body)
     );
 }
+
+#[tokio::test]
+async fn shared_blobs_are_encrypted_at_rest_and_decrypt_on_download() {
+    use sha2::{Digest, Sha256};
+
+    let app = TestApp::with_config(|cfg| cfg.static_key = Some([9u8; 32])).await;
+    let device = app.enroll("desktop").await;
+    let workspace = app.create_workspace(&device, "静态加密").await;
+    let (request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Off,
+        FilesMode::Rw,
+    );
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    let marker = b"plaintext-marker-blob-9f";
+    let (status, body) = upload(&app, &token, "secret.txt", "text/plain", marker, None).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let entry: PublicFileEntry = TestApp::json(&body);
+
+    let hash = hex::encode(Sha256::digest(marker));
+    let stored = tokio::fs::read(app.state.shared.blob_path(&hash))
+        .await
+        .expect("blob file");
+    assert!(
+        !stored.windows(marker.len()).any(|window| window == marker),
+        "共享 blob 落盘不得包含明文"
+    );
+    assert!(stored.starts_with(b"CB1\0"), "必须带分块密文魔数");
+    assert_eq!(
+        stored.len(),
+        4 + 24 + 4 + marker.len() + 16,
+        "魔数 + nonce + 长度 + 密文 + tag"
+    );
+
+    let (status, downloaded) = app
+        .send(app.public(
+            "GET",
+            &format!("/public/workspaces/files/{}/blob", entry.id),
+            &token,
+            b"",
+            &[],
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(downloaded, marker, "下载必须解回原文");
+}
+
+#[tokio::test]
+async fn ticket_can_be_reused_within_window() {
+    let app = TestApp::new().await;
+    let device = app.enroll("desktop").await;
+    let blob = app.upload_private_blob(&device, b"retry-bytes").await;
+    let (request, token) = link_request(ShareKind::File, &blob.hash, NoteMode::Off, FilesMode::Ro);
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    let (status, body) = app
+        .send(app.public("POST", "/public/files/confirm", &token, b"", &[]))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let confirm: ConfirmResponse = TestApp::json(&body);
+    let uri = format!("/public/files/blob?ticket={}", confirm.ticket);
+
+    // 票据 45s 内可重试：断点/重试下载不应第二次就 410。
+    for attempt in 0..2 {
+        let (status, downloaded) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
+        assert_eq!(status, StatusCode::OK, "第 {attempt} 次下载失败");
+        assert_eq!(downloaded, b"retry-bytes");
+    }
+}

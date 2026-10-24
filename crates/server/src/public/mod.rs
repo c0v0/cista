@@ -249,9 +249,13 @@ pub async fn serve_blob(
     name: &str,
 ) -> Result<Response, AppError> {
     let path = state.shared.blob_path(blob_hash);
-    let bytes = tokio::fs::read(&path)
+    let stored = tokio::fs::read(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
+    let bytes = match &state.cfg.static_key {
+        Some(key) => crate::blob_crypto::open_blob(key, &stored)?,
+        None => stored,
+    };
     let headers = download_headers(name, "application/octet-stream");
     Ok((StatusCode::OK, headers, bytes).into_response())
 }
@@ -290,13 +294,19 @@ pub fn ensure_public(workspace: &WorkspaceRow) -> Result<(), AppError> {
 }
 
 /// 共享库里维护 blob 文件本体：不存在才写，内容寻址。
+///
+/// 配了 `CISTA_STATIC_KEY` 时落盘为密文（见 `blob_crypto`）；否则明文（仅开发/测试）。
 pub async fn store_shared_blob(state: &AppState, hash: &str, bytes: &[u8]) -> Result<(), AppError> {
     let path = state.shared.blob_path(hash);
     if tokio::fs::try_exists(&path).await? {
         return Ok(());
     }
+    let payload = match &state.cfg.static_key {
+        Some(key) => crate::blob_crypto::seal_blob(key, bytes)?,
+        None => bytes.to_vec(),
+    };
     let tmp = path.with_extension("tmp");
-    write_tmp(&tmp, bytes).await?;
+    write_tmp(&tmp, &payload).await?;
     tokio::fs::rename(&tmp, &path).await?;
     Ok(())
 }

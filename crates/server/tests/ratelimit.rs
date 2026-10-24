@@ -92,3 +92,67 @@ async fn link_burst_returns_429_with_retry_after() {
     let response = limited.expect("burst=3 后必须出现 429");
     assert!(retry_after_secs(&response) >= 1);
 }
+
+#[tokio::test]
+async fn per_ip_bucket_limits_unauthenticated_floods() {
+    use axum::body::Body;
+    use axum::http::Request;
+
+    let app = TestApp::with_config(|cfg| {
+        cfg.rate_per_minute = 60;
+        cfg.rate_burst = 2;
+    })
+    .await;
+
+    let anonymous = || {
+        Request::builder()
+            .method("GET")
+            .uri("/api/notes")
+            .body(Body::empty())
+            .expect("request")
+    };
+
+    for _ in 0..2 {
+        let (status, _) = app.send(anonymous()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, _) = app.send(anonymous()).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "未认证洪泛也必须按 IP 限速"
+    );
+}
+
+#[tokio::test]
+async fn repeated_bad_signatures_get_locked_out() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use common::now_ts;
+
+    let app = TestApp::new().await;
+    let device = app.enroll("lockout-device").await;
+
+    let bad_request = |nonce_byte: u8| {
+        Request::builder()
+            .method("GET")
+            .uri("/api/notes")
+            .header("x-device-id", device.device_id())
+            .header("x-nonce", hex::encode([nonce_byte; 16]))
+            .header("x-timestamp", now_ts().to_string())
+            .header("x-signature", "00".repeat(64))
+            .body(Body::empty())
+            .expect("request")
+    };
+
+    let mut locked = false;
+    for attempt in 0..8u8 {
+        let (status, _) = app.send(bad_request(attempt + 1)).await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            locked = true;
+            break;
+        }
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "第 {attempt} 次应为 401");
+    }
+    assert!(locked, "连续伪造签名后必须进入指数退避");
+}

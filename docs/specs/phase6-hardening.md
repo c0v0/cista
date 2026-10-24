@@ -23,10 +23,14 @@
 
 - 实现：进程内令牌桶（按 key 懒创建 + 定期清理），不依赖外部存储；单实例前提。
 - 429 响应体只含 `{"error":"rate_limited"}`，不泄漏桶状态细节。
-- **已实现（ADR 0007）**：`dev:<device_id>`（验签后）与 `share:<link_id>`（token 命中后）两个维度；
+- **已实现（ADR 0007）**：`dev:<device_id>`（验签后）、`share:<link_id>`（token 命中后）与
+  `ip:<peer>`（最外层中间件，`/healthz` 不计）三个维度；
   配置 `CISTA_RATE_LIMIT_PER_MIN` / `CISTA_RATE_LIMIT_BURST`；
-  测试 `crates/server/src/rate_limit.rs`（4 项单元）与 `tests/ratelimit.rs`（2 项集成）。
-- **未实现**：每 IP 桶（待反代侧限速或确认可信代理）、认证失败指数退避、`drop` 更严额度。
+  测试 `crates/server/src/rate_limit.rs`（7 项单元）与 `tests/ratelimit.rs`（4 项集成）。
+- **已实现（认证失败退避）**：同 key（设备 id，缺省匿名桶）5 分钟内连续失败 5 次后
+  按 1/2/4…（上限 60s）锁定，成功验签清零；实现于 `rate_limit::FailureTracker`，
+  接入 `auth::require_signed`。
+- **未实现**：`drop` 链接更严额度；反向代理侧的全局限速（当前 `ip:<peer>` 是应用层兜底）。
 - **已实现（分页硬上限）**：`GET /public/workspaces/files?limit=&offset=` 默认 50、最大 200
   （越界钳制而非 400），响应带 `next_offset`；Web 客户端 `listAllFiles()` 按 `next_offset` 翻页。
   测试：`tests/sharing.rs::workspace_file_list_is_paginated_and_capped`、`shareClient.test.ts` 2 项。
