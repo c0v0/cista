@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 
+import {
+  downloadAttachment,
+  prepareAttachment,
+  uploadAttachment,
+} from "../lib/attachments";
 import { desktopSecretStore } from "../lib/native";
 import { decryptNote, listNotes, newNoteId, saveNote } from "../lib/notesApi";
 import type { Session } from "../lib/notesApi";
 import { ApiError } from "../lib/notesApi";
+import type { NoteAttachment } from "../lib/noteCrypto";
 import { forgetRememberedDevice } from "../lib/rememberedDevice";
 import { RecoveryCodePanel } from "./PairPage";
 
@@ -28,6 +34,7 @@ export function NotesPage({
   const [current, setCurrent] = useState<{ id: string; rev: number } | null>(null);
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
+  const [attachments, setAttachments] = useState<NoteAttachment[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -72,6 +79,7 @@ export function NotesPage({
         setCurrent({ id: found.id, rev: found.rev });
         setTitle(plaintext.title);
         setMarkdown(plaintext.markdown);
+        setAttachments(plaintext.attachments ?? []);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "解密失败");
       }
@@ -82,8 +90,47 @@ export function NotesPage({
     setCurrent({ id: newNoteId(), rev: 0 });
     setTitle("");
     setMarkdown("");
+    setAttachments([]);
     setStatus("新笔记：保存后 rev 从 1 开始");
     setError(null);
+  };
+
+  const attach = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const prepared = await prepareAttachment(session, file);
+      const stored = await uploadAttachment(session, prepared);
+      setAttachments((list) => [...list, stored]);
+      setStatus(`已上传附件：${stored.name}（保存笔记后随笔记生效）`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "附件上传失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadOne = async (attachment: NoteAttachment) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const bytes = await downloadAttachment(session, attachment);
+      const buffer = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer;
+      const url = URL.createObjectURL(new Blob([buffer]));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = attachment.name;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setStatus(`已解密下载：${attachment.name}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "附件下载失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const save = async () => {
@@ -96,7 +143,7 @@ export function NotesPage({
         session,
         current.id,
         nextRev,
-        { title, markdown },
+        { title, markdown, attachments: attachments.length > 0 ? attachments : undefined },
         current.rev === 0 ? undefined : current.rev,
       );
       setCurrent({ id: saved.id, rev: saved.rev });
@@ -183,6 +230,36 @@ export function NotesPage({
           <button type="button" disabled={busy} onClick={() => void save()}>
             {busy ? "保存中…" : current.rev === 0 ? "创建" : "保存"}
           </button>
+
+          <ul className="files">
+            {attachments.map((attachment) => (
+              <li key={attachment.hash}>
+                <span>
+                  {attachment.name}
+                  <small> {Math.ceil(attachment.size / 1024)} KB</small>
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void downloadOne(attachment)}
+                >
+                  下载
+                </button>
+              </li>
+            ))}
+          </ul>
+          <label className="hint">
+            添加附件（客户端加密后上传）
+            <input
+              type="file"
+              disabled={busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void attach(file);
+                event.target.value = "";
+              }}
+            />
+          </label>
         </div>
       ) : null}
 
