@@ -24,8 +24,13 @@
 - **文件本体**：`store_shared_blob` 内容寻址、幂等写入（已存在不重写）。
 - **过期清理**：v1 **不做后台任务**。过期链接只在访问时 410（不消费次数）。
   共享 blob 的回收依赖显式撤销（`DELETE /api/share/{id}`）与工作区文件删除；
-  过期未撤销的单文件链接的副本会在磁盘上停留，这是已知缺口，列入 Phase 6
-  运维脚本（`scripts/gc.sh`，按 `share_links.expires_at < now()` 批量撤销）而不是加常驻任务。
+  过期未撤销的单文件链接的副本会在磁盘上停留。
+- **一次性回收命令（Phase 6 落地）**：`cista-server gc`（SSH 手工或定时器执行，无公网入口）。
+  在一个事务序列里：把 `expires_at <= now()` 或 `used_count >= max_uses` 且未撤销的链接
+  标记 `revoked_at`；单文件链接按 `release_shared_copy` 减引用，归零时删元数据、删本体、
+  释放实例配额；删除 `blob_tickets` 中过期票据。输出
+  `expired_links=… released_blobs=… expired_tickets=…`，重复执行幂等。
+  实现见 `crates/server/src/gc.rs`，测试 `crates/server/tests/gc.rs`。
 
 ## 后果
 

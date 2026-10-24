@@ -5,6 +5,33 @@
 
 设计、决策与验收标准见 `docs/design.md`、`docs/specs/`、`docs/adr/`。
 
+## 当前状态（2026-10-24）
+已完成的部分：
+
+| 阶段 | 内容 | 证据 |
+|---|---|---|
+| Phase 0 | 工作区、CI 草案、ADR 0001–0007、Phase 规格、门禁脚本 | 仓库结构 |
+| Phase 1 | `cista-core` 加密/签名/同步状态机、双库、笔记 CRUD + 增量同步、B+ 中间件 | core 37 + notes 8 + authz 10 + healthz 3 |
+| Phase 2 | 分享链接（file/workspace/口令/次数/过期）、两步下载票据、410、配额、共享库隔离 | sharing 14 项 |
+| Phase 3 | Yjs 文档、快照 + 尾部持久化、`/ws` 握手（分享/所有者）、只读丢弃 | yjs 7 项 + ws_e2e 1 项 |
+| Phase 5（部分） | 归档/隔离区、恢复演练（restic 实跑）、`cista-server gc` | drill 记录、gc 1 项 |
+| Phase 6（部分） | 设备/链接限速（429 + `Retry-After`）、分页硬上限（默认 50/最大 200 + `next_offset`）、共享上传流式写入+硬截断、日志脱敏测试、依赖策略、CORS 白名单 | ratelimit 2 + sharing 14 + logging 1 + cors 3 + deny ok |
+| Web/桌面 SPA | 访客分享页、分享客户端、本地搜索索引；**配对 + 笔记编辑器**（B+ 签名、MK/CK 端到端、MK 仅内存） | web 58 项（含 KAT 互操作）+ 真服务端 e2e + vite build |
+| 门禁 | `./scripts/verify.sh`（web build → rustfmt → clippy → test → deny → web tests） | 脚本即协议 |
+
+**桌面端（Tauri 2）**：壳已接通 `web/dist`；编译需要 GTK/WebKit 开发包
+（`libwebkit2gtk-4.1-dev`、`libgtk-3-dev` 等，见 `apps/desktop`）。
+
+**尚未完成**：
+- **Android**：方案与结论见 `docs/adr/0008-android-spike.md`；缺 SDK/NDK 与真机，未验证，
+  发布检查该项保持未通过。
+- **桌面/移动原生能力**：文件选择器、系统钥匙串（Keychain/Keystore）接入未做；
+  当前 Web/桌面 SPA 的 MK 与设备私钥只在内存，刷新即锁定。
+- **Phase 6 剩余**：每 IP 限速（需确定可信反代头）、认证失败指数退避、外部安全评审。
+
+测试规模：Rust **104 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+Web **58 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
+
 ## 快速开始
 
 ```bash

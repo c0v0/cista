@@ -26,7 +26,10 @@
 - **已实现（ADR 0007）**：`dev:<device_id>`（验签后）与 `share:<link_id>`（token 命中后）两个维度；
   配置 `CISTA_RATE_LIMIT_PER_MIN` / `CISTA_RATE_LIMIT_BURST`；
   测试 `crates/server/src/rate_limit.rs`（4 项单元）与 `tests/ratelimit.rs`（2 项集成）。
-- **未实现**：每 IP 桶（待 Caddy 侧限速或确认可信代理）、认证失败指数退避、`drop` 更严额度。
+- **未实现**：每 IP 桶（待反代侧限速或确认可信代理）、认证失败指数退避、`drop` 更严额度。
+- **已实现（分页硬上限）**：`GET /public/workspaces/files?limit=&offset=` 默认 50、最大 200
+  （越界钳制而非 400），响应带 `next_offset`；Web 客户端 `listAllFiles()` 按 `next_offset` 翻页。
+  测试：`tests/sharing.rs::workspace_file_list_is_paginated_and_capped`、`shareClient.test.ts` 2 项。
 
 ## 2. 日志
 
@@ -65,22 +68,29 @@ Android 真机安装 + 旧版本升级，记录 commit/build ID
 版本号 / CHANGELOG / 回滚命令（systemctl + 上一版二进制）
 ```
 
+原始输出与耗时按发布流程留档，不写入仓库（随版本变化，环境相关）。
+
 ## 5. 已知缺口（进入发布前必须关闭或有书面豁免）
 
-1. **过期单文件链接的共享副本回收**：v1 只在访问时 410，不自动删副本（ADR 0004）。
-   计划：`cista-server gc --links` 一次性命令（SSH 执行），批量撤销过期链接并释放引用。
+1. ~~**过期单文件链接的共享副本回收**~~：已由 `cista-server gc` 关闭（ADR 0004，
+   `crates/server/src/gc.rs` + `tests/gc.rs`）；只在 SSH 手工/定时器执行，无 HTTP 入口。
 2. **私有 blob 未计入实例配额**：只在共享面记账（ADR 0004）。计划：上传 `/api/files` 时
    按内容去重记 `blobs(scope='private')` 用量。
-3. **上传在内存缓冲**：100 MiB × 并发数会顶到 `MemoryMax`。计划：流式写入 + 硬截断。
+3. ~~**上传在内存缓冲**~~：已改为 `spool_upload` 流式写临时文件 + 硬截断，超限立即 413、
+   删除临时文件且不落库；内容寻址去重后原子 `rename`。测试
+   `sharing.rs::upload_streams_and_rejects_oversize_without_leftovers`。
+   （`/api/files` 私有上传仍走内存缓冲，见下条。）
 4. **Range 请求**：下载不支持断点续传的 `Range`（反代可关）。
-5. **Android/桌面构建**：依赖开发机 JDK/SDK 与 WebView2，需在 CI 上验证。
+5. **Android 构建**：缺 JDK/Android SDK/NDK 与真机，未验证；方案与解除条件见
+   `docs/adr/0008-android-spike.md`。
 
 ## 影响面
 
 server（限速中间件/日志/GC 子命令/流式上传）、web（错误码 UI）、deploy（journald 轮转、反代超时）、
-docs（发布清单证据）。
+docs（发布清单）。
 
 ## 需要的 ADR
 
 - 0007：限速算法与 key 选择（进程内令牌桶，单实例）。
-- 0008：日志脱敏字段与哈希口径（token 指纹、IP HMAC）。
+- 0008：Android 客户端方案与验证状态。
+- 日志脱敏字段与哈希口径直接按 §2 实现，不单独立 ADR。

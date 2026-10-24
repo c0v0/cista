@@ -8,6 +8,27 @@
 - 目标：桌面（Tauri 2）与 Web 临时端共用同一 React SPA；本地文件索引与统一搜索；设备配对（B+）与密钥存放。
 - 非目标：离线同步全量落地（桌面真正离线队列按需加）；Android 全功能（只做 spike 结论与最小闭环）。
 
+## 0. 进度（2026-10-24）
+- **已完成**：
+  - `cista-core::search`（LIKE 子串、转义、大小写不敏感、默认 50/最大 200）与其 Web 等价实现
+    `web/src/lib/searchIndex.ts`（内存、不落盘；两套各自单测，语义一致）。
+  - 分享客户端 `web/src/lib/shareClient.ts`（token 只进 header、运行时校验响应）与访客分享页
+    `web/src/pages/SharePage.tsx`（文件链接两步下载、工作区列表/下载/上传、口令、fragment 路由）。
+  - 服务端跨域白名单 `CISTA_CORS_ORIGIN`（`design.md` §4.2），预检与实际请求均有测试。
+  - **桌面壳可编译**：`cargo build -p cista-desktop` 通过，完整 `./scripts/verify.sh`（workspace 含 desktop）
+    为绿；补了缺失的 Tauri 图标与 `scripts/gen-icons.py`，并修正 `verify.sh` 顺序
+    （先构建 `web/dist`，再跑 clippy/test，否则 `frontendDist` 不存在会导致编译失败）。
+  - **配对 + 笔记编辑器**：`web/src/lib/{authClient,noteCrypto,notesApi}.ts` 与
+    `web/src/pages/{PairPage,NotesPage}.tsx`。B+ 签名素材、XChaCha20-Poly1305 AAD、base64 格式
+    与 Rust 用 KAT 向量逐字节对齐（`cargo run -p cista-core --example vectors`）；
+    MK/设备私钥只存在内存，保存带 `If-Match`，409 只提示不覆盖。
+  - 端到端（无浏览器）：`web/src/lib/notesApi.e2e.test.ts` 在真实服务端上跑
+    配对 → 加密保存 → 解密读取 → 冲突 → MK 隔离。
+- **未完成**：Android（方案与解除条件见 `docs/adr/0008-android-spike.md`，缺 SDK/NDK 与真机）；
+  桌面/移动原生能力（文件选择、Keychain/Keystore）未接。
+- **验收方式**：逻辑与协议用单元测试 + 跨语言 KAT + 真服务端 e2e 覆盖；
+  布局与交互的目视验收属于发布检查（`phase6-hardening.md` §4），不写入仓库。
+
 ## 1. 本地文件索引（`design.md` §2.5）
 
 ```sql
@@ -70,4 +91,4 @@ file_index(source_type TEXT, source_id TEXT, note_id TEXT NULL, name TEXT, note_
 
 ## 待确认
 
-- UI 组件库、Markdown 编辑器（CodeMirror 6 候选）；Android 构建是否在本机跑（JDK/SDK 依赖）。
+- UI 组件库、Markdown 编辑器（CodeMirror 6 候选）；Android 构建环境（JDK/SDK/NDK 版本）。
