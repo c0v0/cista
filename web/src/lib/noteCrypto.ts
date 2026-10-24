@@ -26,9 +26,19 @@ export interface SealedNote {
   body: Sealed;
 }
 
+export interface NoteAttachment {
+  hash: string;
+  name: string;
+  size: number;
+  /** 被 MK 包裹的文件密钥（FK）。 */
+  fk_wrap: Sealed;
+}
+
 export interface NotePlaintext {
   title: string;
   markdown: string;
+  /** 空/缺省时不参与序列化（与 Rust `skip_serializing_if` 一致）。 */
+  attachments?: NoteAttachment[];
 }
 
 const encoder = new TextEncoder();
@@ -135,7 +145,12 @@ export function open(key: Key, aadBytes: Uint8Array, sealed: Sealed): Uint8Array
 
 /** 与 Rust `NotePlaintext` 的 serde 序列化一致（字段顺序 title → markdown）。 */
 export function encodePlaintext(note: NotePlaintext): Uint8Array {
-  return encoder.encode(JSON.stringify({ title: note.title, markdown: note.markdown }));
+  // 字段顺序与 Rust serde 一致（title → markdown → attachments）；空附件不输出。
+  const payload =
+    note.attachments && note.attachments.length > 0
+      ? { title: note.title, markdown: note.markdown, attachments: note.attachments }
+      : { title: note.title, markdown: note.markdown };
+  return encoder.encode(JSON.stringify(payload));
 }
 
 export function decodePlaintext(bytes: Uint8Array): NotePlaintext {
@@ -145,7 +160,32 @@ export function decodePlaintext(bytes: Uint8Array): NotePlaintext {
   if (typeof record.title !== "string" || typeof record.markdown !== "string") {
     throw new Error("明文缺少 title/markdown");
   }
-  return { title: record.title, markdown: record.markdown };
+  const rawAttachments = record.attachments;
+  if (rawAttachments === undefined) {
+    return { title: record.title, markdown: record.markdown };
+  }
+  if (!Array.isArray(rawAttachments)) throw new Error("attachments 不是数组");
+  const attachments = rawAttachments.map((entry) => {
+    if (!entry || typeof entry !== "object") throw new Error("附件不是对象");
+    const item = entry as Record<string, unknown>;
+    if (typeof item.hash !== "string" || typeof item.name !== "string") {
+      throw new Error("附件缺少 hash/name");
+    }
+    if (typeof item.size !== "number" || !Number.isFinite(item.size)) {
+      throw new Error("附件 size 不是数字");
+    }
+    const wrap = item.fk_wrap as Record<string, unknown> | undefined;
+    if (!wrap || typeof wrap.nonce !== "string" || typeof wrap.ct !== "string") {
+      throw new Error("附件 fk_wrap 非法");
+    }
+    return {
+      hash: item.hash,
+      name: item.name,
+      size: item.size,
+      fk_wrap: { nonce: wrap.nonce, ct: wrap.ct },
+    };
+  });
+  return { title: record.title, markdown: record.markdown, attachments };
 }
 
 export interface SealNoteOptions {

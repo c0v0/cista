@@ -262,6 +262,7 @@ pub fn sealed_note(mk: &Key, id: &str, rev: u64, title: &str, markdown: &str) ->
         &NotePlaintext {
             title: title.into(),
             markdown: markdown.into(),
+            attachments: Vec::new(),
         },
     )
     .expect("seal note")

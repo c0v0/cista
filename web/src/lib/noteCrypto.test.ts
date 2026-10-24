@@ -3,12 +3,16 @@ import { describe, expect, it } from "vitest";
 import { cryptoVectors } from "./cryptoVectors";
 import {
   ckAad,
+  decodePlaintext,
+  encodePlaintext,
   fromBase64,
   fromHex,
   fromRecoveryCode,
+  generateKey,
   noteAad,
   openNote,
   recoveryCode,
+  seal,
   sealNote,
   toBase64,
   toHex,
@@ -96,3 +100,46 @@ describe("恢复码", () => {
     expect(toHex(fromRecoveryCode(code))).toBe(note.mk_hex);
   });
 });
+
+describe("附件明文扩展", () => {
+  it("空附件不改变序列化（与既有 KAT 兼容）", () => {
+    const encoded = encodePlaintext({ title: "t", markdown: "m" });
+    expect(decoderText(encoded)).toBe('{"title":"t","markdown":"m"}');
+  });
+
+  it("附件随信封往返，字段顺序为 title→markdown→attachments", () => {
+    const fk = generateKey();
+    const fk_wrap = seal(mk, new TextEncoder().encode("cista.fk.v1"), fk);
+    const plaintext = {
+      title: "带附件",
+      markdown: "见文件",
+      attachments: [
+        { hash: "ab".repeat(32), name: "报告.pdf", size: 1024, fk_wrap },
+      ],
+    };
+    const encoded = encodePlaintext(plaintext);
+    const text = decoderText(encoded);
+    expect(text.startsWith('{"title":"带附件","markdown":"见文件","attachments":[')).toBe(true);
+
+    const sealed = sealNote(mk, "note-att", 1, ck, plaintext);
+    expect(openNote(mk, "note-att", sealed)).toEqual(plaintext);
+  });
+
+  it("拒绝非法的 attachments 形状", () => {
+    const encoded = encodePlaintext({
+      title: "t",
+      markdown: "m",
+    });
+    expect(() => decodePlaintext(encoded)).not.toThrow();
+    const bad = new TextEncoder().encode('{"title":"t","markdown":"m","attachments":"x"}');
+    expect(() => decodePlaintext(bad)).toThrow(/attachments/);
+    const badItem = new TextEncoder().encode(
+      '{"title":"t","markdown":"m","attachments":[{"hash":"a"}]}',
+    );
+    expect(() => decodePlaintext(badItem)).toThrow(/hash/);
+  });
+});
+
+function decoderText(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}

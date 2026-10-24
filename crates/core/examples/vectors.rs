@@ -24,6 +24,7 @@ fn main() {
     let plaintext = NotePlaintext {
         title: "向量标题".to_string(),
         markdown: "# 内容\n服务端不可读".to_string(),
+        attachments: Vec::new(),
     };
     let plaintext_json = serde_json::to_vec(&plaintext).expect("json");
 

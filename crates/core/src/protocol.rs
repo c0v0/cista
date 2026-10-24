@@ -257,6 +257,7 @@ mod tests {
             &NotePlaintext {
                 title: "t".into(),
                 markdown: "m".into(),
+                attachments: Vec::new(),
             },
         )
         .expect("seal");

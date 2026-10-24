@@ -85,6 +85,19 @@ pub struct Sealed {
 pub struct NotePlaintext {
     pub title: String,
     pub markdown: String,
+    /// 附件：服务端只见密文；FK 由 MK 包裹后随笔记一起上行。
+    /// 空列表不参与序列化，保持既有密文信封逐字节不变。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<NoteAttachment>,
+}
+
+/// 一个私有附件在笔记里的引用：内容寻址哈希 + 展示名 + 大小 + 被 MK 包裹的文件密钥。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteAttachment {
+    pub hash: String,
+    pub name: String,
+    pub size: u64,
+    pub fk_wrap: Sealed,
 }
 
 /// 私有笔记的密文信封：CK 被 MK 包裹，正文被 CK 加密。
@@ -231,6 +244,7 @@ mod tests {
         NotePlaintext {
             title: title.into(),
             markdown: "# 私有\n服务端不可读".into(),
+            attachments: Vec::new(),
         }
     }
 
@@ -244,6 +258,33 @@ mod tests {
         assert_eq!(opened, plain);
         assert_eq!(sealed.v, NOTE_VERSION);
         assert_eq!(sealed.rev, 3);
+    }
+
+    #[test]
+    fn attachments_roundtrip_and_empty_is_not_serialized() {
+        let mk = Key::generate().expect("mk");
+        let ck = Key::generate().expect("ck");
+
+        // 空附件不改变既有信封明文格式（保持历史密文/向量兼容）。
+        let empty_json = serde_json::to_vec(&note("周报")).expect("json");
+        assert!(!String::from_utf8_lossy(&empty_json).contains("attachments"));
+
+        let fk = Key::generate().expect("fk");
+        let fk_wrap = seal(&mk, b"cista.fk.v1", fk.as_bytes()).expect("wrap fk");
+        let with_file = NotePlaintext {
+            title: "附件".into(),
+            markdown: "见附件".into(),
+            attachments: vec![NoteAttachment {
+                hash: "ab".repeat(32),
+                name: "报告.pdf".into(),
+                size: 1024,
+                fk_wrap,
+            }],
+        };
+        let sealed = seal_note(&mk, "note-2", 1, &ck, &with_file).expect("seal");
+        let opened = open_note(&mk, "note-2", &sealed).expect("open");
+        assert_eq!(opened, with_file);
+        assert_eq!(opened.attachments[0].name, "报告.pdf");
     }
 
     #[test]
