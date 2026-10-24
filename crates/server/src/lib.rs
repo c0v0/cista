@@ -5,7 +5,7 @@
 //! - `/api/devices/enroll`：bootstrap token 或已有设备签名（不走统一中间件）。
 //! - 其余 `/api/*`：B+ 逐请求签名。
 //! - `/public/*`：分享 token 只在 `Authorization: Share <token>` 头里（不进 URL）。
-//! - `/web/*`、`/ws`：Phase 3/4 接入。
+//! - `/ws`：首帧 JSON 握手，之后是 y-sync 标准帧。
 
 pub mod api;
 pub mod auth;
@@ -16,6 +16,9 @@ pub mod ids;
 pub mod public;
 pub mod quota;
 pub mod state;
+pub mod wire;
+pub mod ws;
+pub mod yjs;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
@@ -76,7 +79,8 @@ pub fn app(state: AppState) -> Router {
             "/public/workspaces/files/{id}/blob",
             get(public::workspaces::download),
         )
-        .route("/public/workspaces/events", get(public::workspaces::events));
+        .route("/public/workspaces/events", get(public::workspaces::events))
+        .route("/ws", get(ws::handler));
 
     Router::<AppState>::new()
         .route("/healthz", get(api::health::healthz))

@@ -1,6 +1,6 @@
-# ADR 0006：Yjs 持久化顺序与只读强制
+# ADR 0006：Yjs 持久化顺序、只读强制与线协议实现
 
-- 状态：接受（Phase 3 设计定稿；实现待编译环境恢复后落盘）
+- 状态：接受（Phase 3）
 - 日期：2026-10-24
 
 ## 背景
@@ -8,42 +8,43 @@
 `design.md` §3.8 要求：Rust `yrs` + `y-sync`；每工作区一个 `Doc`；只读连接丢弃 `update`；
 每次 update 同步落库；快照 + 尾部 update 支撑崩溃恢复；单文档 5 MiB / 单 update 1 MiB。
 
-关键抉择是**落库与 ack 的顺序**，以及「只读」在协议层的落点。
+实现时发现一个硬约束：**`y-sync` 最新版本 0.4.0 固定依赖 `yrs ^0.17`**，而 yrs 0.17 的
+`Doc`/`TextRef` 内部用 `Rc`/`NonNull`，**不是 `Send`/`Sync`**——无法放进 axum 的 `AppState`
+（需要 `Send + Sync`）。要让 y-sync 0.4 可用，只能给每个工作区起一条专用线程做 actor，
+或者换一个 `Send` 的 CRDT 版本。
 
 ## 选择
 
-1. **先落库，后转发/ack**：收到客户端 `update` → 校验大小与权限 → 在 SQLite 事务里
-   `INSERT INTO doc_updates(workspace_id, update)` 并提交 → 再 apply 到内存 `Doc` → 再广播给其他连接。
-   这样任何「已被服务端接受」的 update 一定能从库里重放出来。
-2. **快照点语义**：每 100 条 update 或 5 分钟，计算当前 `yjs_state` 与 `state_vector`，
-   写入 `workspace_notes`，提交后删除 `doc_updates.seq <= snapshot_seq` 的行。
-   删除与快照必须在**同一事务**里，避免「快照没写却删了尾部」。
-3. **只读强制在服务端**：`note=ro` 的连接照常收到 sync/awareness，但服务端在 apply/落库之前
-   直接丢弃其 `update`（不回报错误，避免把只读状态泄漏成可探测信号）。
-   `note=off` 的连接不建立 Doc。
-4. **握手**：WebSocket 首帧 JSON（30 秒内），成功后进入 `y-sync` 标准二进制帧：
-
-```json
-{"v":1,"mode":"share","token":"…","object":"<workspace id>"}
-{"v":1,"mode":"owner","device":"…","object":"…","nonce":"…","ts":1730000000,"sig":"…","handshake":"<sha256(canonical JSON)>"}
-```
-
-5. **恢复**：`Doc::new()` → `apply_update(yjs_state)`（若有）→ 按 `seq` 重放 `doc_updates` →
-   与重启前的内容和 `state_vector` 一致（测试断言）。
-6. **卸载**：空闲 10 分钟落盘并卸载 `Doc`；卸载前若快照不足阈值也要做一次快照。
+1. **CRDT 用 `yrs 0.28`（`sync` 特性）**：`Doc` 是 `Send + Sync`，可以直接放进进程状态。
+2. **线协议自己实现（`wire.rs`）**，布局与 y-sync 0.4 / y-websocket 完全一致：
+   `tag: varuint`；`Sync` 帧为 `subtype: varuint + buf`；`Awareness` 帧为 `buf`。
+   状态向量与 update 载荷仍由 `yrs` 编解码（v1）。
+   只实现服务端需要的四类消息：step1 / step2 / update / awareness 转发；
+   awareness 载荷不解析（不落库、只转发）。
+3. **持久化顺序（先落库，后应用/广播）**：收到客户端 `update` → 校验大小与权限 →
+   `INSERT INTO doc_updates` 提交 → apply 到内存 `Doc` → 广播给其他连接。
+   任何被接受的 update 都能从尾部重放。
+4. **快照点语义**：每 100 条 update 或连接关闭时，计算 `yjs_state` + `state_vector` 写入
+   `workspace_notes`，并在**同一事务**里删除 `doc_updates.seq <= max_seq`。
+5. **只读强制在服务端**：`note=ro` 连接照常收到 sync/awareness，但 `apply_client_update`
+   直接丢弃其 update（返回 `None`，不写库、不广播、不报错）。
+6. **握手**：WebSocket 首帧 JSON（30 秒内），成功后进入上面的二进制帧。
+   - 分享：`{"v":1,"mode":"share","token":"…","object":"<workspace id>"}`
+   - 所有者：`{"v":1,"mode":"owner","device":"…","object":"…","nonce":"…","ts":…,"sig":"…"}`，
+     签名素材 `method=WS, path=/ws, body=原始握手 JSON`。
+7. **恢复**：快照 `yjs_state` → 重放 `doc_updates`（按 seq）→ 与关闭前内容/状态向量一致。
 
 ## 后果
 
-- 好处：已确认的 update 不丢；快照与尾部清理原子；只读不可被客户端绕过。
-- 代价：每条 update 一次 SQLite 写（共享库单写者），需要限速；广播在提交之后，延迟略增。
-- 风险：`yrs`/`y-sync` 的 API 版本耦合；Phase 3 测试必须覆盖双客户端、离线并发、重连、重启与只读。
+- 好处：`Doc` 可直接共享；依赖树只有 `yrs`（不再引入一个固定旧版 `yrs` 的 `y-sync`）；
+  线格式与 y-websocket 兼容，Web 客户端可继续用标准协议。
+- 代价：`wire.rs` 是我们维护的协议代码（约 200 行，含 varint 与帧布局测试）；
+  升级 y-protocol 时需要跟 `y-websocket` 对照。
+- 风险：`yrs` 0.28 的 API 与 0.17 不同（`Text::insert` 等），Phase 3 测试覆盖了
+  收敛/离线并发/重连/重启/只读，未覆盖 awareness 语义（v1 只转发）。
 
-## 验证（Phase 3 验收）
+## 验证
 
-- 双客户端收敛（同一 `Y.Text` 最终一致）。
-- 离线并发：两侧离线编辑后重连交换 update 收敛。
-- `note=ro` 发 update：库中状态不变、其他连接收不到。
-- 重连：发 `state_vector` 只补缺失部分。
-- 重启：关闭服务 → 重载 → 内容与 `state_vector` 一致。
-- 快照：阈值触发后 `doc_updates` 被清理，仍可恢复。
-- 超限：单 update > 1 MiB 被拒，库中无该行。
+- `crates/server/tests/yjs.rs`：落库后重启可恢复；双客户端经服务端收敛；离线并发收敛；
+  只读 update 不落库不生效；快照后尾部被清理且状态不变；超 1 MiB update 被拒。
+- `crates/server/src/wire.rs`：varint 往返/截断/溢出；四种帧往返；固定字节布局断言。

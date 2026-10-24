@@ -1,6 +1,7 @@
 //! 进程状态与时钟。
 //!
 //! 私有库与共享库分离（ADR 0001）：分享路由只能拿到 `shared`。
+//! 每个工作区的 yrs 文档与 WS 广播都在这里集中持有。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,7 @@ use tokio::sync::broadcast;
 
 use crate::config::{Config, Quotas};
 use crate::db::{PrivateStore, SharedStore};
+use crate::yjs::Documents;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +21,8 @@ pub struct AppState {
     pub shared: SharedStore,
     pub replay: Arc<Mutex<ReplayCache>>,
     pub events: Arc<EventBus>,
+    pub ws_events: Arc<FrameBus>,
+    pub documents: Arc<Documents>,
 }
 
 impl AppState {
@@ -29,6 +33,8 @@ impl AppState {
             shared,
             replay: Arc::new(Mutex::new(ReplayCache::default())),
             events: Arc::new(EventBus::default()),
+            ws_events: Arc::new(FrameBus::default()),
+            documents: Arc::new(Documents::new()),
         }
     }
 
@@ -69,6 +75,36 @@ impl EventBus {
             .or_insert_with(|| broadcast::channel(64).0);
         // 没有订阅者时 send 会失败，忽略即可。
         let _ = sender.send(rev);
+    }
+}
+
+/// Yjs 帧广播（`/ws`）：每个工作区一个通道，载荷是完整的 y-sync 编码帧。
+#[derive(Debug, Default)]
+pub struct FrameBus {
+    channels: Mutex<HashMap<String, broadcast::Sender<Vec<u8>>>>,
+}
+
+impl FrameBus {
+    pub fn subscribe(&self, workspace_id: &str) -> broadcast::Receiver<Vec<u8>> {
+        let mut channels = self
+            .channels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        channels
+            .entry(workspace_id.to_string())
+            .or_insert_with(|| broadcast::channel(128).0)
+            .subscribe()
+    }
+
+    pub fn publish(&self, workspace_id: &str, frame: Vec<u8>) {
+        let mut channels = self
+            .channels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let sender = channels
+            .entry(workspace_id.to_string())
+            .or_insert_with(|| broadcast::channel(128).0);
+        let _ = sender.send(frame);
     }
 }
 
