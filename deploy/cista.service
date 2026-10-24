@@ -1,0 +1,30 @@
+[Unit]
+Description=cista notes server
+Documentation=file:/srv/cista/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cista
+Group=cista
+EnvironmentFile=/etc/cista/cista.env
+ExecStart=/usr/local/bin/cista-server
+Restart=on-failure
+RestartSec=2
+
+# 最小权限：只读根文件系统，只有数据目录可写（design.md §4.3）
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ReadWritePaths=/srv/cista/data
+UMask=0077
+LimitNOFILE=4096
+# 100 MiB 上传在内存里缓冲，留足余量
+MemoryMax=1G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

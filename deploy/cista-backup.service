@@ -1,0 +1,17 @@
+[Unit]
+Description=cista daily backup
+Documentation=file:/srv/cista/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cista
+Group=cista
+EnvironmentFile=/etc/cista/backup.env
+ExecStart=/srv/cista/scripts/backup.sh
+# 失败写 journal（stderr）并以非零退出，systemd 记录 failed unit
+StandardError=journal
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

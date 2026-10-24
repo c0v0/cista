@@ -1,0 +1,54 @@
+# cista 反代配置（Caddy 2）
+#
+# 职责：TLS/HSTS、请求体上限、超时、WebSocket 不缓冲、访问日志。
+# 分享 token 只在 `Authorization: Share` 头里，因此 URI 不含长期凭据；
+# 单文件下载票据（45s、单对象）在 query 里——若你长期保存访问日志，
+# 需要在日志管道里对 query 脱敏或关闭 URI 记录（本文件不使用未经核实的过滤指令）。
+#
+# 部署：把 example.com 换成真实域名；后端默认 127.0.0.1:8787（CISTA_BIND）。
+
+example.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# 单文件上限 100 MiB + 信封开销
+	request_body {
+		max_size 110MB
+	}
+
+	# WebSocket：/ws 关闭代理缓冲（design.md §4.3）
+	@ws path /ws
+	reverse_proxy @ws 127.0.0.1:8787 {
+		flush_interval -1
+	}
+
+	reverse_proxy 127.0.0.1:8787 {
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	log {
+		output file /var/log/caddy/cista.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format json
+	}
+}
+
+# 可选：单文件下载放独立子域（design.md §3.7「下载可放独立子域」）
+# download.example.com {
+# 	header {
+# 		Content-Security-Policy "default-src 'none'; sandbox"
+# 		X-Content-Type-Options "nosniff"
+# 	}
+# 	reverse_proxy 127.0.0.1:8787
+# }

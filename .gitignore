@@ -1,0 +1,17 @@
+/target
+target/
+node_modules/
+web/dist/
+web/.vite/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+keys/
+*.pem
+*.key
+backup/
+.DS_Store
+*.log
