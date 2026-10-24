@@ -29,10 +29,12 @@
   `native.ts` 与 `rememberedDevice.ts`），只允许存**设备种子**，MK 永不入系统凭据库。
   桌面配对页已接：刷新后复用已记住的设备，只需粘贴恢复码；文件选择器与安装包打包未做。
   Web 端密钥仍只在内存，刷新即锁定。
+- **编辑器附件 UI**：后端（私有 blob 上传 / 取回）与客户端库（`attachments.ts`：加密、上传、
+  取回解密）已就绪并有测试；编辑器的附件按钮/列表尚未接。
 - **Phase 6 剩余**：外部安全评审（未通过不开放公网分享）、反向代理侧全局限速
   （应用层 `ip:<peer>` 桶已兜底）。
 
-测试规模：Rust **116 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+测试规模：Rust **118 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
 Web **64 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
 
 数据边界与删除流程见 `docs/privacy.md`。
