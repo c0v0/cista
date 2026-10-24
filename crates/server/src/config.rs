@@ -16,6 +16,10 @@ pub struct Config {
     pub workspace_quota_bytes: u64,
     /// 单链接配额（设计：0.10 × instance）。
     pub link_quota_bytes: u64,
+    /// 每 key 每分钟补充的令牌数（设备/链接）。
+    pub rate_per_minute: u32,
+    /// 桶容量：允许的突发请求数。
+    pub rate_burst: u32,
     pub log_json: bool,
 }
 
@@ -68,6 +72,13 @@ impl Config {
             parse_u64("CISTA_WORKSPACE_QUOTA_BYTES").unwrap_or(instance_quota_bytes / 4);
         let link_quota_bytes =
             parse_u64("CISTA_LINK_QUOTA_BYTES").unwrap_or(instance_quota_bytes / 10);
+        let rate_per_minute = parse_u64("CISTA_RATE_LIMIT_PER_MIN")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(240);
+        let rate_burst = parse_u64("CISTA_RATE_LIMIT_BURST")
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(rate_per_minute / 2)
+            .max(1);
 
         let log_json = std::env::var("CISTA_LOG_FORMAT")
             .map(|v| v != "pretty")
@@ -81,6 +92,8 @@ impl Config {
             instance_quota_bytes,
             workspace_quota_bytes,
             link_quota_bytes,
+            rate_per_minute,
+            rate_burst,
             log_json,
         })
     }
@@ -95,6 +108,8 @@ impl Config {
             instance_quota_bytes: 4 * MIB,
             workspace_quota_bytes: 2 * MIB,
             link_quota_bytes: MIB,
+            rate_per_minute: 240,
+            rate_burst: 120,
             log_json: false,
         }
     }

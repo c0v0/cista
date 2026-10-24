@@ -23,6 +23,10 @@
 
 - 实现：进程内令牌桶（按 key 懒创建 + 定期清理），不依赖外部存储；单实例前提。
 - 429 响应体只含 `{"error":"rate_limited"}`，不泄漏桶状态细节。
+- **已实现（ADR 0007）**：`dev:<device_id>`（验签后）与 `share:<link_id>`（token 命中后）两个维度；
+  配置 `CISTA_RATE_LIMIT_PER_MIN` / `CISTA_RATE_LIMIT_BURST`；
+  测试 `crates/server/src/rate_limit.rs`（4 项单元）与 `tests/ratelimit.rs`（2 项集成）。
+- **未实现**：每 IP 桶（待 Caddy 侧限速或确认可信代理）、认证失败指数退避、`drop` 更严额度。
 
 ## 2. 日志
 

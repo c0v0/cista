@@ -29,9 +29,15 @@ pub struct TestApp {
 
 impl TestApp {
     pub async fn new() -> Self {
+        Self::with_config(|_| {}).await
+    }
+
+    /// 自定义配置（限速/配额边界测试）。
+    pub async fn with_config(apply: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = Config::for_tests(dir.path().to_path_buf());
         config.bootstrap_token = Some(BOOTSTRAP.to_string());
+        apply(&mut config);
         let private = PrivateStore::connect(&dir.path().join("private.db"))
             .await
             .expect("open private db");

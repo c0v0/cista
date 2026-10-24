@@ -2,7 +2,7 @@
 //!
 //! 规则：不泄漏对象是否存在（404 与 403 同形）、不回显内部细节、不记正文/token。
 
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use cista_core::protocol::ApiError;
@@ -24,6 +24,10 @@ pub enum AppError {
     PayloadTooLarge,
     /// 配额超限（实例/工作区/链接）。
     Quota(&'static str),
+    /// 429：令牌桶耗尽，`Retry-After` 给出等待秒数。
+    RateLimited {
+        retry_after_secs: u64,
+    },
     Internal(anyhow::Error),
 }
 
@@ -63,6 +67,17 @@ impl IntoResponse for AppError {
                 Json(serde_json::json!({ "error": "quota_exceeded", "scope": scope })),
             )
                 .into_response(),
+            Self::RateLimited { retry_after_secs } => {
+                let mut response = (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(ApiError::new("rate_limited")),
+                )
+                    .into_response();
+                if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+                response
+            }
             Self::Internal(err) => {
                 tracing::error!(error = %err, "internal error");
                 (

@@ -12,6 +12,7 @@ use tokio::sync::broadcast;
 
 use crate::config::{Config, Quotas};
 use crate::db::{PrivateStore, SharedStore};
+use crate::rate_limit::{RateConfig, RateLimiter};
 use crate::yjs::Documents;
 
 #[derive(Clone)]
@@ -23,10 +24,15 @@ pub struct AppState {
     pub events: Arc<EventBus>,
     pub ws_events: Arc<FrameBus>,
     pub documents: Arc<Documents>,
+    pub rate: Arc<RateLimiter>,
 }
 
 impl AppState {
     pub fn new(cfg: Config, private: PrivateStore, shared: SharedStore) -> Self {
+        let rate = RateLimiter::new(RateConfig {
+            per_minute: cfg.rate_per_minute,
+            burst: cfg.rate_burst,
+        });
         Self {
             cfg: Arc::new(cfg),
             private,
@@ -35,6 +41,7 @@ impl AppState {
             events: Arc::new(EventBus::default()),
             ws_events: Arc::new(FrameBus::default()),
             documents: Arc::new(Documents::new()),
+            rate: Arc::new(rate),
         }
     }
 

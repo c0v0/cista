@@ -149,6 +149,18 @@ fn ensure_link_usable(link: &Link, check_uses: bool) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 每个链接一个桶（`design.md` §2.3）：公网没有可信设备身份，key 用链接 id。
+///
+/// 只在 token 命中后才建桶；乱猜 token 不会撑大 map。
+fn limit_link(state: &AppState, link: &Link) -> Result<(), AppError> {
+    state
+        .rate
+        .check(&format!("share:{}", link.id), now())
+        .map_err(|limited| AppError::RateLimited {
+            retry_after_secs: limited.retry_after_secs,
+        })
+}
+
 /// 解析并校验 token：非法/不存在统一 404；撤销/过期/用尽统一 410。
 pub async fn load_link(
     state: &AppState,
@@ -156,6 +168,7 @@ pub async fn load_link(
     expected: ShareKind,
 ) -> Result<Link, AppError> {
     let link = fetch_link(state, token, expected).await?;
+    limit_link(state, &link)?;
     ensure_link_usable(&link, true)?;
     Ok(link)
 }
@@ -170,6 +183,7 @@ pub async fn load_link_for_ticket(
     expected: ShareKind,
 ) -> Result<Link, AppError> {
     let link = fetch_link(state, token, expected).await?;
+    limit_link(state, &link)?;
     ensure_link_usable(&link, false)?;
     Ok(link)
 }

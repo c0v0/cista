@@ -103,6 +103,14 @@ pub async fn require_signed(
         .map_err(|_| AppError::PayloadTooLarge)?;
     let device = verify_headers(&state, &parts.headers, &parts.method, &parts.uri, &bytes).await?;
 
+    // 验签通过后按设备限速：伪造设备 id 的请求进不了桶。
+    state
+        .rate
+        .check(&format!("dev:{}", device.id), now())
+        .map_err(|limited| AppError::RateLimited {
+            retry_after_secs: limited.retry_after_secs,
+        })?;
+
     let mut request = Request::from_parts(parts, Body::from(bytes));
     request.extensions_mut().insert(device);
     Ok(next.run(request).await)

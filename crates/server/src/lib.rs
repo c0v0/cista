@@ -15,6 +15,7 @@ pub mod error;
 pub mod ids;
 pub mod public;
 pub mod quota;
+pub mod rate_limit;
 pub mod state;
 pub mod wire;
 pub mod ws;
