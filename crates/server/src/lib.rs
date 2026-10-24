@@ -46,6 +46,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/devices", get(api::devices::list))
         .route("/api/devices/{id}/revoke", post(api::devices::revoke))
         .route("/api/files", post(api::files::upload))
+        .route("/api/files/{hash}", get(api::files::download))
         .route("/api/workspaces", post(api::workspaces::create))
         .route("/api/workspaces/{id}", get(api::workspaces::get))
         .route("/api/workspaces/{id}/restore", post(api::archive::restore))

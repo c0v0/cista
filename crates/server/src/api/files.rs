@@ -87,3 +87,34 @@ pub async fn upload(
 
     Ok((StatusCode::CREATED, Json(BlobRef { hash, size })))
 }
+
+/// `GET /api/files/{hash}`：取回私有 blob（客户端解密）。按内容寻址，鉴权走 B+。
+pub async fn download(
+    State(state): State<AppState>,
+    axum::extract::Path(hash): axum::extract::Path<String>,
+) -> Result<axum::response::Response, AppError> {
+    if hash.len() != 64 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(AppError::NotFound);
+    }
+    let known: Option<i64> =
+        sqlx::query_scalar("SELECT size FROM blobs WHERE hash = ? AND scope = 'private' LIMIT 1")
+            .bind(&hash)
+            .fetch_optional(state.private.pool())
+            .await?;
+    if known.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let bytes = tokio::fs::read(state.data_dir().join("blobs").join("private").join(&hash))
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    use axum::response::IntoResponse;
+    Ok((
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (axum::http::header::CONTENT_DISPOSITION, "attachment"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
