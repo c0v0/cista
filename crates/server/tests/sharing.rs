@@ -528,3 +528,50 @@ async fn workspace_file_list_is_paginated_and_capped() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(TestApp::json::<PublicFileList>(&body).files.len(), 3);
 }
+
+#[tokio::test]
+async fn upload_streams_and_rejects_oversize_without_leftovers() {
+    let app = TestApp::with_config(|cfg| cfg.max_file_bytes = 1024).await;
+    let device = app.enroll("desktop").await;
+    let workspace = app.create_workspace(&device, "流式上传").await;
+    let (request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Off,
+        FilesMode::Rw,
+    );
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    let big = vec![7u8; 4096];
+    let (status, _) = upload(&app, &token, "big.txt", "text/plain", &big, None).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    // 临时文件必须清理，且不留下任何行/本体。
+    let probes = app.state.shared.blob_path("probe");
+    let blobs_dir = probes.parent().expect("blobs dir");
+    let mut entries = tokio::fs::read_dir(blobs_dir).await.expect("read dir");
+    while let Some(entry) = entries.next_entry().await.expect("entry") {
+        let name = entry.file_name().to_string_lossy().to_string();
+        assert!(!name.starts_with(".upload-"), "临时文件未清理: {name}");
+    }
+    let (status, body) = app
+        .send(app.public("GET", "/public/workspaces/files", &token, b"", &[]))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        TestApp::json::<PublicFileList>(&body).files.is_empty(),
+        "被拒的上传不能留下文件行"
+    );
+
+    // 上限内的小文件仍然可用（流式路径正常收尾）。
+    let (status, body) = upload(&app, &token, "ok.txt", "text/plain", b"hi", None).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+}

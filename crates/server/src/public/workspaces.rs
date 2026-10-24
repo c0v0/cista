@@ -3,7 +3,7 @@
 //! 所有权限位在服务端判定（`design.md` §3.3）；`drop` 链接列目录一律 403。
 //! token 走 `Authorization: Share <token>` 头，不在 URL 里。
 
-use axum::body::Bytes;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -13,7 +13,7 @@ use cista_core::protocol::{PublicFileEntry, PublicFileList, PublicMeta, PAGE_DEF
 use cista_core::share::{
     can_manage_files, can_read_files, can_upload, is_allowed_mime, sanitize_file_name, ShareKind,
 };
-use futures_util::stream::Stream;
+use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -116,7 +116,7 @@ pub async fn upload(
     State(state): State<AppState>,
     ShareToken(token): ShareToken,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Result<(StatusCode, Json<PublicFileEntry>), AppError> {
     let link = load_link(&state, &token, ShareKind::Workspace).await?;
     let workspace = load_workspace(&state, &link.object_id).await?;
@@ -141,15 +141,22 @@ pub async fn upload(
         return Err(AppError::BadRequest("unsupported_media_type"));
     }
 
-    let size = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    // 流式写入临时文件：内存占用与并发数无关，超限立即 413 并清理。
+    let temp_path = state
+        .shared
+        .blob_path(&format!(".upload-{}", crate::ids::new_id("up")));
+    let (size, blob_hash) = spool_upload(body, &temp_path, state.cfg.max_file_bytes).await?;
     if size == 0 {
+        let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(AppError::BadRequest("empty_file"));
     }
-    if size > state.cfg.max_file_bytes {
-        return Err(AppError::PayloadTooLarge);
+    // 内容寻址：同内容已存在时丢弃临时文件（不重写本体）。
+    let final_path = state.shared.blob_path(&blob_hash);
+    if tokio::fs::try_exists(&final_path).await? {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+    } else {
+        tokio::fs::rename(&temp_path, &final_path).await?;
     }
-
-    let blob_hash = hex::encode(Sha256::digest(&body));
     let final_name = unique_name(&state, &link.object_id, &name).await?;
     let file_id = crate::ids::new_id("f");
     let created_at = now();
@@ -194,7 +201,7 @@ pub async fn upload(
     .bind(created_at)
     .execute(&mut *tx)
     .await?;
-    crate::public::store_shared_blob(&state, &blob_hash, &body).await?;
+    // 本体在流式阶段已经落到内容寻址路径，这里只提交元数据。
     tx.commit().await?;
 
     state.events.publish(&link.object_id, 1);
@@ -216,6 +223,45 @@ pub async fn upload(
             created_at,
         }),
     ))
+}
+
+/// 把请求体流式写入 `path`，同时算 sha256；超过 `limit` 立即失败并删除临时文件。
+///
+/// 这样 100 MiB 上传不会整包进内存（`phase6-hardening.md` §5.3）。
+async fn spool_upload(
+    body: Body,
+    path: &std::path::Path,
+    limit: u64,
+) -> Result<(u64, String), AppError> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut hasher = Sha256::new();
+    let mut size: u64 = 0;
+    let mut stream = body.into_data_stream();
+    let outcome: Result<(), AppError> = async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| AppError::BadRequest("broken_body"))?;
+            size = size.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+            if size > limit {
+                return Err(AppError::PayloadTooLarge);
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        Ok(())
+    }
+    .await;
+
+    match outcome {
+        Ok(()) => Ok((size, hex::encode(hasher.finalize()))),
+        Err(error) => {
+            drop(file);
+            let _ = tokio::fs::remove_file(path).await;
+            Err(error)
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
