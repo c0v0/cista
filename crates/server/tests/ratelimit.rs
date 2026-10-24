@@ -156,3 +156,55 @@ async fn repeated_bad_signatures_get_locked_out() {
     }
     assert!(locked, "连续伪造签名后必须进入指数退避");
 }
+
+#[tokio::test]
+async fn drop_links_use_stricter_upload_quota() {
+    // burst=4：两次签名请求 + 第一次上传用掉 IP 桶；drop 桶只有 1（4/4），第二次上传即 429。
+    let app = TestApp::with_config(|cfg| {
+        cfg.rate_per_minute = 60;
+        cfg.rate_burst = 4;
+    })
+    .await;
+    let device = app.enroll("drop-device").await;
+    let workspace = app.create_workspace(&device, "投递").await;
+
+    let (mut request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Off,
+        FilesMode::Drop,
+    );
+    request.passphrase = Some("pw".into());
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    let upload = |name: &str| {
+        app.public(
+            "POST",
+            "/public/workspaces/files/upload",
+            &token,
+            b"payload",
+            &[
+                ("x-file-name", name),
+                ("content-type", "text/plain"),
+                ("x-share-passphrase", "pw"),
+            ],
+        )
+    };
+
+    let (status, body) = app.send(upload("a.txt")).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let (status, _) = app.send(upload("b.txt")).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "drop 链接的投递额度必须更严"
+    );
+}

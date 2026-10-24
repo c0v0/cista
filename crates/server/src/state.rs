@@ -25,6 +25,7 @@ pub struct AppState {
     pub ws_events: Arc<FrameBus>,
     pub documents: Arc<Documents>,
     pub rate: Arc<RateLimiter>,
+    pub drop_rate: Arc<RateLimiter>,
     pub failures: Arc<FailureTracker>,
 }
 
@@ -33,6 +34,11 @@ impl AppState {
         let rate = RateLimiter::new(RateConfig {
             per_minute: cfg.rate_per_minute,
             burst: cfg.rate_burst,
+        });
+        // 投递链接（只上传、不列目录）用更严的额度。
+        let drop_rate = RateLimiter::new(RateConfig {
+            per_minute: (cfg.rate_per_minute / 4).max(1),
+            burst: (cfg.rate_burst / 4).max(1),
         });
         Self {
             cfg: Arc::new(cfg),
@@ -43,6 +49,7 @@ impl AppState {
             ws_events: Arc::new(FrameBus::default()),
             documents: Arc::new(Documents::new()),
             rate: Arc::new(rate),
+            drop_rate: Arc::new(drop_rate),
             failures: Arc::new(FailureTracker::new(5, 300)),
         }
     }

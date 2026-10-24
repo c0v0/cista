@@ -12,6 +12,7 @@ use axum::Json;
 use cista_core::protocol::{PublicFileEntry, PublicFileList, PublicMeta, PAGE_DEFAULT, PAGE_MAX};
 use cista_core::share::{
     can_manage_files, can_read_files, can_upload, is_allowed_mime, sanitize_file_name, ShareKind,
+    FILE_DROP_UPLOAD_ONLY,
 };
 use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
@@ -125,6 +126,15 @@ pub async fn upload(
         return Err(AppError::Forbidden);
     }
     require_passphrase(&link, &headers)?;
+    // `drop` 链接只上传、不列目录，额度比普通分享链接更严（见 ADR 0007）。
+    if link.file_scopes & FILE_DROP_UPLOAD_ONLY != 0 {
+        state
+            .drop_rate
+            .check(&format!("drop:{}", link.id), now())
+            .map_err(|limited| AppError::RateLimited {
+                retry_after_secs: limited.retry_after_secs,
+            })?;
+    }
 
     let raw_name = headers
         .get("x-file-name")
