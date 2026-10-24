@@ -1,5 +1,14 @@
 [advisories]
 yanked = "warn"
+# 忽略的条目必须写清来源与理由；只在「无已知漏洞、上游无修复版本」时使用。
+ignore = [
+  # Tauri/GTK 栈：glib-macros 0.18 依赖 proc-macro-error 1.0.4（无维护标识）。
+  # 该 crate 只在编译期展开宏，不进产物；等 Tauri 升级到 glib 0.19+ 后复核。
+  "RUSTSEC-2024-0370",
+  # yrs 0.28 依赖 smallstr 0.3.1（不再维护标识）；yrs 上游暂无替代版本。
+  # 用于文档字符串的内部表示，无已知漏洞；升级 yrs 时复核。
+  "RUSTSEC-2026-0215",
+]
 
 [licenses]
 confidence-threshold = 0.8
@@ -11,6 +20,8 @@ allow = [
   "BSD-3-Clause",
   "ISC",
   "Unicode-DFS-2016",
+  # ICU4X / litemap / zerovec 等（Tauri → wry → url → idna → icu_*）。
+  "Unicode-3.0",
   "Zlib",
   "MPL-2.0",
 ]
