@@ -42,8 +42,9 @@ pub async fn upload(
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(&hash);
 
-    if tokio::fs::try_exists(&path).await? {
-        // 同内容已存在：不重复计 refcount。
+    let existed = tokio::fs::try_exists(&path).await?;
+    if existed {
+        // 同内容已存在：不重复写盘、也不重复记账。
         tracing::debug!(hash = %hash, "blob already present");
     } else {
         let tmp = dir.join(format!(".{hash}.tmp"));
@@ -54,7 +55,10 @@ pub async fn upload(
         tokio::fs::rename(&tmp, &path).await?;
     }
 
-    sqlx::query(
+    // 与共享面共用同一份实例配额计数（shared.usage_counters.instance.total）；
+    // 私有 blob 行仍在私有库里。两库不同事务，失败时补偿回滚。
+    let mut tx = state.private.pool().begin().await?;
+    let inserted = sqlx::query(
         "INSERT INTO blobs (hash, scope, size, refcount, created_at)
          VALUES (?, 'private', ?, 1, ?)
          ON CONFLICT(hash, scope) DO NOTHING",
@@ -62,8 +66,24 @@ pub async fn upload(
     .bind(&hash)
     .bind(i64::try_from(size).unwrap_or(i64::MAX))
     .bind(now())
-    .execute(state.private.pool())
-    .await?;
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if inserted == 1 {
+        let mut quota_tx = state.shared.pool().begin().await?;
+        if let Err(error) =
+            crate::quota::reserve_instance(&mut quota_tx, size, state.quotas()).await
+        {
+            drop(quota_tx);
+            drop(tx);
+            if !existed {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            return Err(error);
+        }
+        quota_tx.commit().await?;
+    }
+    tx.commit().await?;
 
     Ok((StatusCode::CREATED, Json(BlobRef { hash, size })))
 }

@@ -78,8 +78,9 @@ Android 真机安装 + 旧版本升级，记录 commit/build ID
 
 1. ~~**过期单文件链接的共享副本回收**~~：已由 `cista-server gc` 关闭（ADR 0004，
    `crates/server/src/gc.rs` + `tests/gc.rs`）；只在 SSH 手工/定时器执行，无 HTTP 入口。
-2. **私有 blob 未计入实例配额**：只在共享面记账（ADR 0004）。计划：上传 `/api/files` 时
-   按内容去重记 `blobs(scope='private')` 用量。
+2. ~~**私有 blob 未计入实例配额**~~：已计入共享库的 `usage_counters.instance.total`
+   （同内容按哈希去重只记一次；超限 413 + `scope=instance`）。测试
+   `crates/server/tests/private_quota.rs`。注意：私有附件**不自动回收**，见 `docs/privacy.md` §3。
 3. ~~**上传在内存缓冲**~~：已改为 `spool_upload` 流式写临时文件 + 硬截断，超限立即 413、
    删除临时文件且不落库；内容寻址去重后原子 `rename`。测试
    `sharing.rs::upload_streams_and_rejects_oversize_without_leftovers`。

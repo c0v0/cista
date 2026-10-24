@@ -27,11 +27,13 @@
   发布检查该项保持未通过。
 - **桌面/移动原生能力**：文件选择器、系统钥匙串（Keychain/Keystore）接入未做；
   当前 Web/桌面 SPA 的 MK 与设备私钥只在内存，刷新即锁定。
-- **Phase 6 剩余**：外部安全评审（未通过不开放公网分享）、私有 blob 计入实例配额、
-  `drop` 更严额度、反向代理侧全局限速。
+- **Phase 6 剩余**：外部安全评审（未通过不开放公网分享）、`drop` 更严额度、
+  反向代理侧全局限速。
 
-测试规模：Rust **114 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+测试规模：Rust **115 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
 Web **58 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
+
+数据边界与删除流程见 `docs/privacy.md`。
 
 ## 快速开始
 
