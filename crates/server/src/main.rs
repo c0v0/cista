@@ -13,6 +13,14 @@ async fn main() -> anyhow::Result<()> {
     init_tracing(config.log_json);
 
     tokio::fs::create_dir_all(&config.data_dir).await?;
+
+    // 一次性运维命令（SSH）：`cista-server gc` 回收过期链接/票据/共享副本。
+    if std::env::args().nth(1).as_deref() == Some("gc") {
+        let report = cista_server::gc::run(&config).await?;
+        println!("{report}");
+        return Ok(());
+    }
+
     let private = PrivateStore::connect(&config.data_dir.join("private.db")).await?;
     let shared = SharedStore::connect(
         &config.data_dir.join("shared.db"),
