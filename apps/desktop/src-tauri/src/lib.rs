@@ -52,21 +52,74 @@ fn secret_delete(key: String) -> Result<(), String> {
     }
 }
 
+// Android：把密钥写进应用私有目录（`filesDir` 等价的 app_data_dir），文件权限 0600。
+// 这不是 Keystore（密钥仍以明文 JSON 形式存在于应用沙箱内），但能做到重启/升级不丢，
+// 且其他应用与非 root 的备份无法直接读取；后续替换为 AndroidKeyStore 时接口不变。
 #[cfg(target_os = "android")]
-#[tauri::command]
-fn secret_save(_key: String, _value: String) -> Result<(), String> {
-    Err("Android Keystore 适配尚未实现：本次会话不会持久化设备密钥".into())
+fn secrets_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager as _;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir.join("cista-secrets.json"))
+}
+
+#[cfg(target_os = "android")]
+fn read_secrets(
+    app: &tauri::AppHandle,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let path = secrets_path(app)?;
+    if !path.exists() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let raw = std::fs::read(&path).map_err(|error| error.to_string())?;
+    serde_json::from_slice(&raw).map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+fn write_secrets(
+    app: &tauri::AppHandle,
+    secrets: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = secrets_path(app)?;
+    let tmp = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&tmp).map_err(|error| error.to_string())?;
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = file.metadata().map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o600);
+        file.set_permissions(perms).map_err(|e| e.to_string())?;
+    }
+    file.write_all(&serde_json::to_vec(secrets).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    file.flush().map_err(|error| error.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "android")]
 #[tauri::command]
-fn secret_load(_key: String) -> Result<Option<String>, String> {
-    Ok(None)
+fn secret_save(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+    let mut secrets = read_secrets(&app)?;
+    secrets.insert(key, value);
+    write_secrets(&app, &secrets)
 }
 
 #[cfg(target_os = "android")]
 #[tauri::command]
-fn secret_delete(_key: String) -> Result<(), String> {
+fn secret_load(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
+    Ok(read_secrets(&app)?.get(&key).cloned())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn secret_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
+    let mut secrets = read_secrets(&app)?;
+    if secrets.remove(&key).is_some() {
+        write_secrets(&app, &secrets)?;
+    }
     Ok(())
 }
 

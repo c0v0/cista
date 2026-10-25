@@ -30,3 +30,6 @@
    `scripts/backup.sh` 与 `scripts/restore-drill.sh`。
 
 说明：Actions 里的产物是**未签名**构建；公开分发前建议补代码签名（Windows）与 Android 签名（keystore）。
+
+> 注：Android 目前把设备种子与 MK 存在**应用私有目录**（`cista-secrets.json`，0600），
+> 重启/升级不丢但**不是 Keystore**；替换为 AndroidKeyStore 时接口不变。
