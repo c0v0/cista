@@ -53,22 +53,24 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun secret_save(invoke: Invoke) {
-    val key = invoke.getString("key") ?: return invoke.reject("missing key")
-    val value = invoke.getString("value") ?: return invoke.reject("missing value")
+    val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
+    val value = invoke.getArgs().getString("value") ?: return invoke.reject("missing value")
     prefs.edit().putString(key, encrypt(value)).apply()
     invoke.resolve()
   }
 
   @Command
   fun secret_load(invoke: Invoke) {
-    val key = invoke.getString("key") ?: return invoke.reject("missing key")
+    val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
     val result = prefs.getString(key, null)?.let { decrypt(it) }
-    invoke.resolveObject(org.json.JSONObject().put("value", result ?: org.json.JSONObject.NULL))
+    val out = app.tauri.plugin.JSObject()
+    out.put("value", result)
+    invoke.resolve(out)
   }
 
   @Command
   fun secret_delete(invoke: Invoke) {
-    val key = invoke.getString("key") ?: return invoke.reject("missing key")
+    val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
     prefs.edit().remove(key).apply()
     invoke.resolve()
   }

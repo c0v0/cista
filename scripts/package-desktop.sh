@@ -17,8 +17,7 @@ cd apps/desktop/src-tauri
 pnpm dlx @tauri-apps/cli@2 build --bundles "$BUNDLES" \
   --config '{"build":{"beforeBuildCommand":""}}'
 
-TARGET_ROOT=${CARGO_TARGET_DIR:-$PWD/target}
-cd "$(dirname "$0")/.."
+TARGET_ROOT=${CARGO_TARGET_DIR:-"$(cd "$(dirname "$0")/.." && pwd)/target"}
 echo "== 产物 =="
 find "$TARGET_ROOT/release/bundle" -maxdepth 2 -type f \
   \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' \) -print
