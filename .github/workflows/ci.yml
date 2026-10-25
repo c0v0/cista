@@ -1,11 +1,19 @@
 name: ci
+
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +29,16 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - run: cargo install cargo-deny --locked
+      # 桌面壳（Tauri）在 Linux 上需要 GTK/WebKit 开发包，否则 clippy/test 失败。
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev pkg-config libssl-dev
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - run: bash scripts/verify.sh
 
   windows:
@@ -40,5 +57,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - run: cargo install cargo-deny --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - run: bash scripts/verify.sh
