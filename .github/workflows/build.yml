@@ -176,9 +176,9 @@ jobs:
           python3 scripts/android-signing.py
       - name: Build APK
         working-directory: apps/desktop/src-tauri
-        env:
-          NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
-        run: pnpm dlx @tauri-apps/cli@2 android build --apk --ci --config '{"build":{"beforeBuildCommand":""}}'
+        run: |
+          export NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.3.11579264"
+          pnpm dlx @tauri-apps/cli@2 android build --apk --ci --config '{"build":{"beforeBuildCommand":""}}'
       - uses: actions/upload-artifact@v4
         with:
           name: cista-android-apk
