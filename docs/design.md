@@ -415,7 +415,7 @@ restic backup /srv/cista/blob /backup/db.sqlite /srv/cista/config
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| 0 | 仓库、CI、`.omp`、`verify.sh`、Tauri Android spike | 干净 clone 能跑绿；spike 有结论；uptime 告警到达；备份 timer + 恢复 |
+| 0 | 仓库、CI、`verify.sh`、Tauri Android spike | 干净 clone 能跑绿；spike 有结论；uptime 告警到达；备份 timer + 恢复 |
 | 1 | `crates/core` 加密 + B+ 认证 + 笔记 CRUD | 设备吊销即无效；A 读 B 404；磁盘无明文 |
 | 2 | 共享工作区 + 文件区 + 单文件链接 | 只读链接不能写；上传配额并发正确；过期 410；文件/链接 A→B 403/404 |
 | 3 | Yjs 实时 + 崩溃恢复 | 双客户端收敛；离线并发编辑收敛；只读连接不能发 update；重连补齐；重启不丢已确认 update |
