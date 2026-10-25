@@ -126,6 +126,7 @@ fn secret_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_cista_keystore::init())
         .invoke_handler(tauri::generate_handler![
             platform_info,
             secret_save,

@@ -11,34 +11,46 @@ describe("tauriInvoke", () => {
     expect(tauriInvoke()).toBeNull();
     expect(desktopSecretStore()).toBeNull();
   });
-
-  it("桌面环境返回可用调用器", () => {
-    const invoke = vi.fn(async () => null);
-    vi.stubGlobal("__TAURI_INTERNALS__", { invoke });
-    expect(tauriInvoke()).toBeTypeOf("function");
-  });
 });
 
 describe("desktopSecretStore", () => {
-  it("把三个命令映射到 Tauri invoke", async () => {
+  it("优先调用移动插件命令，参数透传", async () => {
     const invoke = vi.fn(async (command: string) => {
+      if (command.endsWith("secret_load")) return { value: "c2VlZA" };
+      return null;
+    });
+    vi.stubGlobal("__TAURI_INTERNALS__", { invoke });
+    const store = desktopSecretStore();
+
+    await store!.save("device-seed:abc", "seed");
+    expect(invoke).toHaveBeenCalledWith("plugin:cista-keystore|secret_save", {
+      key: "device-seed:abc",
+      value: "seed",
+    });
+
+    expect(await store!.load("device-seed:abc")).toBe("c2VlZA");
+
+    await store!.remove("device-seed:abc");
+    expect(invoke).toHaveBeenCalledWith("plugin:cista-keystore|secret_delete", {
+      key: "device-seed:abc",
+    });
+  });
+
+  it("插件不可用时回退到宿主命令", async () => {
+    const invoke = vi.fn(async (command: string) => {
+      if (command.startsWith("plugin:")) throw new Error("plugin missing");
       if (command === "secret_load") return "c2VlZA";
       return null;
     });
     vi.stubGlobal("__TAURI_INTERNALS__", { invoke });
     const store = desktopSecretStore();
-    expect(store).not.toBeNull();
 
-    await store!.save("device-seed:abc", "seed");
-    expect(invoke).toHaveBeenCalledWith("secret_save", { key: "device-seed:abc", value: "seed" });
-
-    expect(await store!.load("device-seed:abc")).toBe("c2VlZA");
-
-    await store!.remove("device-seed:abc");
-    expect(invoke).toHaveBeenCalledWith("secret_delete", { key: "device-seed:abc" });
+    await store!.save("k", "v");
+    expect(invoke).toHaveBeenCalledWith("secret_save", { key: "k", value: "v" });
+    expect(await store!.load("k")).toBe("c2VlZA");
   });
 
-  it("load 返回非字符串时归一为 null", async () => {
+  it("load 返回非字符串/非 value 对象时归一为 null", async () => {
     vi.stubGlobal("__TAURI_INTERNALS__", { invoke: vi.fn(async () => 42) });
     expect(await desktopSecretStore()!.load("k")).toBeNull();
   });
