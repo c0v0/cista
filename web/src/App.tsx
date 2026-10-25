@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { resolveApiBase } from "./lib/apiBase";
+import { desktopSecretStore } from "./lib/native";
 import type { Session } from "./lib/notesApi";
+import { forgetMasterKey, restoreDevice, restoreMasterKey } from "./lib/rememberedDevice";
 import { parseShareFragment } from "./lib/shareLink";
 import { NotesPage } from "./pages/NotesPage";
 import { PairPage } from "./pages/PairPage";
@@ -28,12 +30,37 @@ export function App() {
   const target = parseShareFragment(hash);
   const wantsApp = hash.startsWith("#/app");
 
+  // 原生端：设备种子 + MK 都在系统安全存储里时，启动即自动解锁（Web 无 store，保持内存-only）。
+  useEffect(() => {
+    const store = desktopSecretStore();
+    if (!store) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const device = await restoreDevice(store);
+        const mk = await restoreMasterKey(store);
+        if (!cancelled && device && mk) setSession({ apiBase, device, mk });
+      } catch {
+        // 读不到就按未解锁处理。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+
+  const lock = () => {
+    setSession(null);
+    const store = desktopSecretStore();
+    if (store) void forgetMasterKey(store);
+  };
+
   return (
     <main>
       {target ? <SharePage target={target} /> : null}
       {!target && wantsApp
         ? session
-          ? <NotesPage session={session} onLock={() => setSession(null)} />
+          ? <NotesPage session={session} onLock={lock} />
           : <PairPage apiBase={apiBase} onPaired={setSession} />
         : null}
       {!target && !wantsApp ? (

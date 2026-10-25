@@ -5,7 +5,7 @@ import { desktopSecretStore } from "../lib/native";
 import type { Session } from "../lib/notesApi";
 import { enrollDevice } from "../lib/notesApi";
 import { fromRecoveryCode, generateKey, recoveryCode } from "../lib/noteCrypto";
-import { rememberDevice, restoreDevice } from "../lib/rememberedDevice";
+import { rememberDevice, rememberMasterKey, restoreDevice } from "../lib/rememberedDevice";
 
 /**
  * 配对页：bootstrap token 只能入网一次；私钥种子与 MK 都只留在内存。
@@ -62,6 +62,14 @@ export function PairPage({
         }
       }
       const mk = recovery.trim() ? fromRecoveryCode(recovery) : generateKey();
+      if (store) {
+        // 原生端：MK 交给系统安全存储，下次启动自动解锁（Web 端 store 为 null）。
+        try {
+          await rememberMasterKey(store, mk);
+        } catch {
+          // 失败则退化为内存-only，不影响本次使用。
+        }
+      }
       onPaired({ apiBase, device, mk });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "配对失败");
