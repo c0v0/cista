@@ -166,13 +166,21 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: pnpm dlx @tauri-apps/cli@2 android init --ci
       - name: Release signing (optional)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/cista-release.jks"
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "no signing secrets configured; APK will use the debug signature"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/cista-release.jks"
           export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/cista-release.jks"
-          export ANDROID_KEYSTORE_PASSWORD="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
-          export ANDROID_KEY_ALIAS="${{ secrets.ANDROID_KEY_ALIAS }}"
-          export ANDROID_KEY_PASSWORD="${{ secrets.ANDROID_KEY_PASSWORD }}"
+          export ANDROID_KEYSTORE_PASSWORD="$KS_PASSWORD"
+          export ANDROID_KEY_ALIAS="$KS_ALIAS"
+          export ANDROID_KEY_PASSWORD="$KEY_PASSWORD"
           python3 scripts/android-signing.py
       - name: Build APK
         working-directory: apps/desktop/src-tauri
