@@ -88,6 +88,7 @@ crates/core     协议/加密/B+ 认证/同步状态机/客户端索引（无 IO
 crates/server   axum API、私有库 + 共享库、共享 blob
 apps/desktop    Tauri 2 原生壳（复用 web/）
 web/            React + Vite + TS SPA
+docs/           design / privacy / adr / specs（阶段规格与验收）
 scripts/        verify.sh、backup.sh、restore-drill.sh
 deploy/         systemd unit/timer、Caddyfile
 ```
