@@ -58,6 +58,8 @@ cargo run -p cista-server       # 默认 127.0.0.1:8787，数据在 ./data
   人工部分（MK 解密一条笔记）必须补上。
 - 迁移演练：`scripts/migration-drill.sh <空目录>` 在副本上做前向迁移，并验证迁移前快照仍可启动
   （等价于「回滚 = 换回旧二进制 + 恢复备份」的数据侧检查）。
+- 桌面打包：`scripts/package-desktop.sh [deb|deb,appimage]`（先构建 `web/dist`，再调 tauri CLI；
+  产物在 `target/release/bundle/`）。安装包不提交进仓库。
 - 共享 blob 静态加密：生产必须设置 `CISTA_STATIC_KEY`（32 字节 hex，与其它钥匙分开托管）；
   未设置时共享文件明文落盘，仅适合开发/测试（见 ADR 0009）。
 - 升级 / 回滚：
