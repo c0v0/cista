@@ -20,4 +20,4 @@ pnpm dlx @tauri-apps/cli@2 build --bundles "$BUNDLES" \
 TARGET_ROOT=${CARGO_TARGET_DIR:-target}
 echo "== 产物 =="
 find "$TARGET_ROOT/release/bundle" -maxdepth 2 -type f \
-  \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) -print
+  \( -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' \) -print
