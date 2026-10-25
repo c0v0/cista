@@ -37,6 +37,48 @@ jobs:
             target/release/cista-server.exe
           if-no-files-found: error
 
+  web:
+    name: web bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm -C web install --frozen-lockfile
+      - run: pnpm -C web typecheck && pnpm -C web test -- --run
+      - run: pnpm -C web build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cista-web
+          path: web/dist
+          if-no-files-found: error
+
+  android-core:
+    name: android core (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: android-actions/setup-android@v3
+      - name: Install NDK
+        run: sdkmanager --install "ndk;26.3.11579264" platform-tools >/dev/null
+      - name: Build cista-core for Android
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/aarch64-linux-android21-clang"
+          export CC_aarch64_linux_android="$NDK/aarch64-linux-android21-clang"
+          export AR_aarch64_linux_android="$NDK/llvm-ar"
+          cargo build -p cista-core --release --target aarch64-linux-android
+
   desktop-linux:
     name: desktop (linux)
     runs-on: ubuntu-latest
@@ -95,7 +137,7 @@ jobs:
   release:
     name: attach release assets
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [server, desktop-linux, desktop-windows]
+    needs: [server, web, desktop-linux, desktop-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
