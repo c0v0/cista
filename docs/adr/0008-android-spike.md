@@ -35,6 +35,18 @@ Phase 4 要求「Android 真机安装 + 旧版本升级，记录 commit/build ID
 4. **构建**：`pnpm -C web build && pnpm -C apps/desktop tauri android init` →
    `pnpm -C apps/desktop tauri android build --apk`（或 `cargo tauri android build`）。
 
+## 已验证（构建环境，2026-10-25）
+
+- 放行 `dl.google.com`/`maven.google.com`/`repo1.maven.org`/`plugins.gradle.org` 后，
+  `sdkmanager` 可装 `platform-tools`、`platforms;android-34`、`build-tools;34.0.0`、`ndk;26.3.11579264`
+  （合计约 2.5 GB）。
+- `rustup target add aarch64-linux-android` 成功；用 NDK 的
+  `aarch64-linux-android21-clang` 作为 linker/CC、`llvm-ar` 作为 AR，
+  **`cargo build -p cista-core --target aarch64-linux-android --release` 通过**
+  （`libcista_core.rlib`，1.8 MB）——即加密/签名/同步核心可直接进 APK。
+- **未做**：`tauri android init/build --apk`。原因：Tauri 依赖全量交叉编译 + Gradle 首次下载
+  需要额外 4–6 GB 磁盘，当前构建机余量不足；真机安装/升级更需设备。
+
 ## 验收证据（缺一不可）
 
 - `adb install -r` 到真机；`adb shell dumpsys package com.cista.notes` 的 `versionName`；
@@ -47,5 +59,5 @@ Phase 4 要求「Android 真机安装 + 旧版本升级，记录 commit/build ID
 ## 后果
 
 - 发布检查 P10（Android 真机 + 升级）**保持未通过**，直到上面证据齐备；不得用「编译通过」代替。
-- 风险：NDK 26 与 AGP/Tauri 2.12 的兼容性未验证；Gradle 首次下载耗时且受网络策略影响。
+- 风险：NDK 26 与 AGP/Tauri 2.12 的兼容性未验证（核心交叉编译已验证）；Gradle 首次下载耗时且受网络策略影响。
 - 回滚：不引入 Android 特有代码路径，删除 `apps/desktop/src-tauri/gen/android` 即可回到仅桌面/Web。
