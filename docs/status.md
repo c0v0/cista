@@ -8,17 +8,15 @@
 | Web | ✅ 完成 | ✅ 自动（`web/dist`） | 分享页、配对、笔记编辑器、附件 |
 | Linux 桌面 | ✅ 完成 | ✅ 自动（deb + AppImage） | 同一 SPA + Tauri 壳；钥匙串（Secret Service） |
 | Windows 桌面 | ✅ 完成 | ✅ 自动（nsis 安装包） | 同一 SPA + Tauri 壳；钥匙串（Credential Manager） |
-| Android | ⚠️ 未完成 | ⚠️ 仅核心交叉编译 | 缺 Android 工程与 Keystore 适配，见下 |
+| Android | ⚠️ 可运行（Keystore 未适配） | ✅ CI 构建 APK（`android-apk`） | 会话内可用；刷新后需重新入网，见下 |
 
 ## Android 还差什么
 
-1. `pnpm dlx @tauri-apps/cli@2 android init` 生成 `apps/desktop/src-tauri/gen/android`；
-2. 把 `secret_save/load/delete` 的 `keyring` 后端换成 Android Keystore（现有 `keyring` 只支持桌面三平台）；
-3. `tauri android build --apk`（需要 platform-34 / build-tools-34 / NDK 26，CI 已装）；
-4. 真机 `adb install`、旧版本升级、Keystore 别名稳定性验证。
+1. ~~`tauri android init` + `tauri android build --apk`~~ **已接入 CI**（`android-apk` job）；
+2. 把 Android 分支的 `secret_save/load/delete`（当前明确返回「未实现」）换成 Android Keystore；
+3. 真机 `adb install`、旧版本升级、Keystore 别名稳定性验证。
 
-核心部分（加密/签名/同步）已能在 CI 里交叉编译到 `aarch64-linux-android`，
-所以第 1–3 步属于壳与平台适配，不涉及业务逻辑重写。
+核心与壳已能编译；第 2 步是平台适配，第 3 步需要设备。
 
 ## 发布步骤
 

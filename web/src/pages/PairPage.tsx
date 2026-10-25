@@ -54,8 +54,12 @@ export function PairPage({
           crypto.getRandomValues(new Uint8Array(32)),
         ));
       if (!remembered && store) {
-        // 只在桌面端写系统钥匙串；Web 端保持纯内存。
-        await rememberDevice(store, device);
+        // 桌面端写系统钥匙串；Android 的 Keystore 适配尚未实现，失败不影响本次配对。
+        try {
+          await rememberDevice(store, device);
+        } catch {
+          // 本次会话仍可正常使用，只是刷新后需要重新入网。
+        }
       }
       const mk = recovery.trim() ? fromRecoveryCode(recovery) : generateKey();
       onPaired({ apiBase, device, mk });
