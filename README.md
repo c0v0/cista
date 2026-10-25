@@ -91,3 +91,16 @@ web/            React + Vite + TS SPA
 scripts/        verify.sh、backup.sh、restore-drill.sh
 deploy/         systemd unit/timer、Caddyfile
 ```
+
+## 参与与法律
+
+- 贡献流程与门禁：`CONTRIBUTING.md`
+- 漏洞报告（请勿开公开 issue）：`SECURITY.md`
+- 许可证：MIT（见 `LICENSE`）
+
+## 开源项目 ≠ 运营公开实例
+
+仓库本身按普通开源项目提供（MIT、可自建、CI + 测试 + 发布包）。若你把它跑成**公开服务**，
+以下属于**运营者责任**，不是项目交付门槛：可用性监控与告警、备份 timer 的真实运行、
+按自身合规要求做安全评审、以及移动端在真实设备上的验收。
+项目文档不宣称已完成上述运营动作。
