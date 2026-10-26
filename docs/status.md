@@ -28,8 +28,10 @@ SharedPreferences）；插件不可用时回退到应用私有目录（`cista-se
 2. 确认 Actions：`.github/workflows/ci.yml`（verify）与 `build.yml`（产物）全绿。
 3. `git tag v0.1.1 && git push origin v0.1.1`。
 4. `build.yml` 的 release job 自动把**可执行产物**挂到 Release：
-   `cista-server`（linux/windows）、`Cista_*_amd64.deb`、`Cista_*_amd64.AppImage`、
-   `Cista_*_x64-setup.exe`。Web 前端从仓库源码构建（`pnpm -C web build`），不随 Release 发布。
+   `cista-server`（linux/windows）、`Cista_*_debian13_amd64.deb`、`Cista_*_ubuntu24.04_amd64.deb`、
+   `Cista_*_amd64.AppImage`、`Cista_*_x64-setup.exe`、`Cista_android-universal.apk`。
+   Web 前端从仓库源码构建（`pnpm -C web build`），不随 Release 发布；APK 为 release keystore 签名版。
+   Linux 的 `.deb` 分别在 Debian 13 容器与 Ubuntu 24.04 runner 上构建，依赖按各自发行版解析。
 5. 自托管部署：按 `deploy/` 与 README 的部署小节配置 `CISTA_*` 环境变量。
 
 产物签名：Android APK 由 release keystore 签名；服务端与桌面安装包为未签名构建。

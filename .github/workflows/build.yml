@@ -76,9 +76,9 @@ jobs:
           export AR_aarch64_linux_android="$NDK/llvm-ar"
           cargo build -p cista-core --release --target aarch64-linux-android
 
-  desktop-linux:
-    name: desktop (linux)
-    runs-on: ubuntu-latest
+  desktop-linux-ubuntu:
+    name: desktop (ubuntu)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -99,12 +99,51 @@ jobs:
             librsvg2-dev libxdo-dev pkg-config libssl-dev
       - name: Package desktop
         run: bash scripts/package-desktop.sh deb,appimage
+      - name: Tag deb as ubuntu
+        run: |
+          for f in target/release/bundle/deb/*.deb; do
+            base="$(basename "$f" _amd64.deb)"
+            mv "$f" "$(dirname "$f")/${base}_ubuntu24.04_amd64.deb"
+          done
+          ls target/release/bundle/deb
       - uses: actions/upload-artifact@v4
         with:
-          name: cista-desktop-linux
+          name: cista-desktop-ubuntu
           path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  desktop-linux-debian:
+    name: desktop (debian)
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config file \
+            libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          apt-get install -y --no-install-recommends nodejs
+          npm install -g pnpm@9
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Package desktop (deb only)
+        run: bash scripts/package-desktop.sh deb
+      - name: Tag deb as debian
+        run: |
+          for f in target/release/bundle/deb/*.deb; do
+            base="$(basename "$f" _amd64.deb)"
+            mv "$f" "$(dirname "$f")/${base}_debian13_amd64.deb"
+          done
+          ls target/release/bundle/deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cista-desktop-debian
+          path: target/release/bundle/deb/*.deb
           if-no-files-found: error
 
   desktop-windows:
@@ -216,11 +255,16 @@ jobs:
               --ks-key-alias "$ALIAS" --out "${apk%-unsigned.apk}-signed.apk" "$aligned"
             echo "signed: ${apk%-unsigned.apk}-signed.apk"
           done
+          SIGNED=$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*-signed.apk" | head -1)
+          if [ -n "$SIGNED" ]; then
+            cp "$SIGNED" "$(dirname "$SIGNED")/Cista_android-universal.apk"
+            echo "publish: $(dirname "$SIGNED")/Cista_android-universal.apk"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: cista-android-apk
-          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/Cista_android-universal.apk
+          if-no-files-found: ignore
 
   android-emulator:
     name: android install check (emulator)
@@ -252,7 +296,7 @@ jobs:
   release:
     name: attach release assets
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [server, web, desktop-linux, desktop-windows]
+    needs: [server, web, desktop-linux-ubuntu, desktop-linux-debian, desktop-windows, android-apk, android-emulator]
     runs-on: ubuntu-latest
     permissions:
       contents: write

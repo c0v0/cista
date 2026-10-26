@@ -16,7 +16,7 @@
 - 补 `CODE_OF_CONDUCT.md`、`.github/PULL_REQUEST_TEMPLATE.md`、feature request 模板、
   issue 模板配置、`.github/CODEOWNERS`、`.editorconfig`、`docs/README.md` 文档索引；
   README 增加 CI/Release/License 徽章与「客户端连接服务器」章节。
-- Release 只挂可执行产物（服务端二进制、deb/AppImage/NSIS 安装包），不再附带 `web/dist`
+- Release 只挂可执行产物（服务端二进制、Debian/Ubuntu 两个 deb、AppImage、NSIS 安装包、签名 APK），不再附带 `web/dist`
   的 html/js/css；`web` job 仅保留 typecheck/test/build 验证。
 
 ## [0.1.0] - 2026-10-24
