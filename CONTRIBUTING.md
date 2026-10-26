@@ -30,5 +30,8 @@
 
 ## 报告问题
 
-- 功能缺陷 → issue（附版本、复现步骤、期望/实际）。
-- 安全漏洞 → 按 `SECURITY.md` 走私密报告。
+- 功能缺陷 → issue（模板已含版本、复现步骤、期望/实际）。
+- 功能建议 → feature request 模板；先说明要解决的问题。
+- 安全漏洞 → 按 `SECURITY.md` 走私密报告，**不要开公开 issue**。
+- 参与讨论与提交 PR 前请遵守 `CODE_OF_CONDUCT.md`；PR 按
+  `.github/PULL_REQUEST_TEMPLATE.md` 填写实际验证命令与结果。

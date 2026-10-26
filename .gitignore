@@ -3,6 +3,9 @@ target/
 node_modules/
 web/dist/
 web/.vite/
+web/coverage/
+apps/desktop/src-tauri/gen/
+data/
 *.db
 *.db-shm
 *.db-wal
