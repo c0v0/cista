@@ -219,7 +219,9 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
-            adb install -r apk/*.apk
+            APK=$(find apk -name "*.apk" | head -1)
+            echo "installing $APK"
+            adb install -r "$APK"
             adb shell am start -W -n com.cista.notes/.MainActivity
             adb shell dumpsys package com.cista.notes | grep -E "versionName|firstInstallTime"
 
