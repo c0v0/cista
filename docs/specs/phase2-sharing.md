@@ -110,12 +110,12 @@ GET    /public/workspaces/{token}/events     SSE：只发 rev
 | desktop/web | 不改（Phase 4 接 UI）；web 已有 fragment 解析 |
 | android | 不改 |
 
-## 需要的 ADR
+## 相关 ADR
 
 - 0004：共享 blob 静态加密与 `refcount` 生命周期（含过期只删共享副本）。
 - 0005：两步消费用「原子 UPDATE ... WHERE used_count < max_uses」而非应用层计数（并发正确性）。
 
-## 待确认
+## 决定
 
-- 单文件链接是否允许可选口令：`design.md` §3.4 未要求；v1 不做（仅 `drop` 默认要求口令）。
-- `X-Share-Passphrase` 的限速参数细节：沿用按链接/IP 限速（Phase 6 统一调）。
+- 单文件链接支持可选口令（`passphrase` 字段）；`drop` 链接默认要求口令。
+- 口令失败与链接请求共用按链接/IP 限速桶（`CISTA_RATE_LIMIT_PER_MIN/BURST`）。

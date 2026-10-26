@@ -61,12 +61,13 @@ doc_updates(seq INTEGER PK AUTOINCREMENT, workspace_id, update BLOB, created_at)
 | core | 不改（Yjs 不进 core：`core` 禁 IO，且 yrs 是服务端/客户端各自依赖） |
 | web/desktop/android | 不改（Phase 4 接 y-websocket 或自研客户端） |
 
-## 需要的 ADR
+## 相关 ADR
 
 - 0006：`doc_updates` 与快照的写入顺序（先落库再 ack）与快照点语义（`seq <= snapshot_seq` 删除）。
 
-## 待确认
+## 决定
 
-- 客户端用 `y-websocket`（需要服务端说标准 y-sync 二进制协议）还是自研 WS 封装：
-  Phase 4 决定；服务端两种都兼容（`y-sync` 默认协议即标准二进制帧）。
-- awareness 是否转发访客身份（v1 只转发匿名光标，不带昵称）。
+- 服务端 `/ws` 使用手写 lib0 帧（`crates/server/src/wire.rs`），帧布局与 y-sync 0.4 一致（ADR 0006）；
+  由 `tests/ws_e2e.rs`、`tests/yjs.rs` 覆盖双客户端收敛与持久化。
+- v1 的 Web/桌面编辑器走 REST + `If-Match`（`web/src/pages/NotesPage.tsx`），不接实时通道。
+- awareness 只转发匿名光标，不带昵称或设备标识。

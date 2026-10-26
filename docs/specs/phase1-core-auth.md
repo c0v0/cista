@@ -78,11 +78,11 @@
 | core | 改：新增 `crypto`、`auth`、`sync`、`protocol` |
 | desktop/web/android | 不改（Phase 4 接入） |
 
-## 需要的 ADR
+## 相关 ADR
 
 - 0003：`PUT /api/notes/{id}` 的并发模型（`If-Match` + rev 单调）与服务端冲突副本策略。
 - 0004：blob 存储布局与 `refcount`（Phase 2 一起落）。
 
-## 待确认
+## 决定
 
-- 恢复码格式（人读分组长度）与客户端 UI：待 Phase 4 定；格式本身不影响服务端。
+- 恢复码 = MK（32 字节）的 base64url，43 字符、不分组；客户端原样复制/粘贴即可，服务端不参与。

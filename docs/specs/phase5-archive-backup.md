@@ -77,10 +77,10 @@ restic backup <data>/blobs <backup>/private.db <backup>/shared.db <data>/config
 | deploy | 新增：`deploy/cista.service`、`deploy/cista-backup.{service,timer}`、`deploy/Caddyfile` |
 | core | 改：归档信封格式（私有笔记 + 附件引用）与校验辅助 |
 
-## 需要的 ADR
+## 相关 ADR
 
 - 0009：归档由客户端执行时的「校验 → archive-complete → purge」顺序与失败重试语义。
 
-## 待确认
+## 决定
 
-- 共享收件箱（所有者侧 `uploads` 视图）在 UI 的呈现方式：Phase 4/5 交界，UI 后置。
+- v1 不提供独立「共享收件箱」视图：上传结果通过工作区文件列表与配额计数呈现。

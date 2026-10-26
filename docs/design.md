@@ -86,7 +86,7 @@
 - 共用 `blobs(hash, scope, size, refcount)`；私有与共享物理分离。
 - 客户端本地索引（桌面/手机 SQLite，Web 内存；`LIKE` 子串，转义 `%/_`）：`source_type, source_id, note_id, name, note_title`；只索引私有内容；搜索文件名（`name`；不搜正文/OCR）→ 附件打开所属笔记并定位；`note_title` 仅展示；`drive_node` 打开网盘位置。
 - 索引随附件同步/改名/删除、笔记改名/删除增量更新，可全量重建；不同步、不上传；只存文件名/标题/ID，不存正文。
-- `source_type` 预留 `note_attachment | drive_node`；v1 只写 `note_attachment`，私有网盘后续接入同一索引；v1 不做私有网盘本体。
+- `source_type` 取值 `note_attachment`（v1 只写这一个；`drive_node` 为保留值，不建私有网盘表）。
 - 统一搜索框默认只查本地私有；切到共享范围才请求共享搜索（q 会到服务端）。共享结果打开工作区；私有内容/索引永不出客户端；服务端只查共享表。
 - 共享搜索 v1 只搜 active 工作区标题与文件名，不搜 Yjs 正文；离线只返回本地私有结果。
 
@@ -218,7 +218,7 @@
 ### 4.3 部署
 
 - 单实例；**不强制容器**：默认单二进制 + systemd；Docker 只是可选包装。
-- 域名布局：同源或前后端分域都支持；不假设一定两个域名；多实例以后再说。
+- 域名布局：同源或前后端分域都支持；不假设一定两个域名；单实例部署。
 - 约束：代码与配置不得要求 Docker、前后端分域或 VPN；Docker/分域只是支持，VPN 不采用。
 - Caddy：TLS/HSTS/请求体限制/超时/限速；WebSocket 代理关闭缓冲。
 - 若用容器：非 root、只读根文件系统、`no-new-privileges`、内存/CPU/PID 限制；若用 systemd：专用用户、只读数据目录、limits。
@@ -437,7 +437,7 @@ restic backup /srv/cista/blob /backup/db.sqlite /srv/cista/config
 
 - 部署：单实例；默认单二进制 + systemd；Docker 可选；同源默认，前后端分域可选。不强制容器/双域名。
 - 共享文件区权限三 bit + UI 预设；文件区扁平、保留 `parent_id`。
-- 客户端本地文件索引（桌面/手机 SQLite `LIKE`；Web 内存）；私有搜索不出端；共享搜索只查共享表；`source_type` 预留 `drive_node`；v1 不做私有网盘本体。
+- 客户端本地文件索引（桌面/手机 SQLite `LIKE`；Web 内存）；私有搜索不出端；共享搜索只查共享表；`source_type` 取 `note_attachment`（`drive_node` 为保留值）。
 - 结构化日志，轮转约 30 天（journald 或 Docker）；不建审计表；过渡区不自动删除，人工清理。
 - 单文件 100 MiB；上传白名单；配额百分比；list/搜索分页，按 IP + 设备/链接限速。
 - `/api`、`/public`、`/web`、`/ws`；`/healthz` 公网必需（外部 uptime）。

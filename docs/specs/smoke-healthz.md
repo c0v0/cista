@@ -28,10 +28,10 @@
 | web | 不改（uptime 直接打服务端） |
 | android | 不改 |
 
-## 需要的 ADR
+## 相关 ADR
 
 无（不碰 crypto/auth/schema）。
 
-## 待确认
+## 决定
 
-- 部署时 `/healthz` 是否暴露在反代公网段：是（`design.md` §2.3 要求公网部署必需）。
+- `/healthz` 暴露在反代公网段（`design.md` §2.3 要求公网部署必需），不返回版本或路径信息。

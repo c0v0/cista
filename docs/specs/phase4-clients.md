@@ -8,32 +8,6 @@
 - 目标：桌面（Tauri 2）与 Web 临时端共用同一 React SPA；本地文件索引与统一搜索；设备配对（B+）与密钥存放。
 - 非目标：离线同步全量落地（桌面真正离线队列按需加）；Android 全功能（只做 spike 结论与最小闭环）。
 
-## 0. 进度（2026-10-24）
-- **已完成**：
-  - `cista-core::search`（LIKE 子串、转义、大小写不敏感、默认 50/最大 200）与其 Web 等价实现
-    `web/src/lib/searchIndex.ts`（内存、不落盘；两套各自单测，语义一致）。
-  - 分享客户端 `web/src/lib/shareClient.ts`（token 只进 header、运行时校验响应）与访客分享页
-    `web/src/pages/SharePage.tsx`（文件链接两步下载、工作区列表/下载/上传、口令、fragment 路由）。
-  - 服务端跨域白名单 `CISTA_CORS_ORIGIN`（`design.md` §4.2），预检与实际请求均有测试。
-  - **桌面壳可编译**：`cargo build -p cista-desktop` 通过，完整 `./scripts/verify.sh`（workspace 含 desktop）
-    为绿；补了缺失的 Tauri 图标与 `scripts/gen-icons.py`，并修正 `verify.sh` 顺序
-    （先构建 `web/dist`，再跑 clippy/test，否则 `frontendDist` 不存在会导致编译失败）。
-  - **配对 + 笔记编辑器**：`web/src/lib/{authClient,noteCrypto,notesApi}.ts` 与
-    `web/src/pages/{PairPage,NotesPage}.tsx`。B+ 签名素材、XChaCha20-Poly1305 AAD、base64 格式
-    与 Rust 用 KAT 向量逐字节对齐（`cargo run -p cista-core --example vectors`）；
-    MK/设备私钥只存在内存，保存带 `If-Match`，409 只提示不覆盖。
-  - 端到端（无浏览器）：`web/src/lib/notesApi.e2e.test.ts` 在真实服务端上跑
-    配对 → 加密保存 → 解密读取 → 冲突 → MK 隔离。
-  - **服务器地址初始化**：`web/src/pages/ServerSetupPage.tsx` +
-    `web/src/lib/serverSettings.ts`。原生端（桌面/Android）未配置前不得进入配对/分享页；
-    Web 默认同源。地址存 `localStorage:cista.server.base`，可「测试连接」（`/healthz`）、
-    随时更换；换服务器会锁定会话。测试：13 项单元 + 4 项 jsdom 渲染/交互
-    （`web/src/App.test.tsx`）。
-  - **Android 已接 AndroidKeyStore**（`plugins/keystore`），CI 构建并签名 APK，
-    模拟器安装/启动步骤已通过。
-- **验收方式**：逻辑与协议用单元测试 + 跨语言 KAT + 真服务端 e2e 覆盖；
-  布局与交互的目视验收属于发布检查（`phase6-hardening.md` §4），不写入仓库。
-
 ## 1. 本地文件索引（`design.md` §2.5）
 
 ```sql
@@ -83,17 +57,21 @@ file_index(source_type TEXT, source_id TEXT, note_id TEXT NULL, name TEXT, note_
 
 | 面 | 改/不改 |
 |---|---|
-| web | 改：搜索索引、搜索 UI、配对页、share 访客页 |
-| desktop | 改：keychain、本地 SQLite 索引、附件 IO、Tauri command 暴露 core |
-| android | 改：spike 分支（结论） |
-| server | 改：`/web/pair/*` 端点（配对与临时会话） |
-| core | 改：`search`（纯逻辑：转义/匹配/排序）、`protocol` 增加配对载荷类型 |
+| web | 改：搜索索引、搜索 UI、配对页、分享访客页、服务器地址设置 |
+| desktop | 改：Tauri 壳与命令桥（`secret_save/load/delete`），复用 `web/` |
+| android | 改：Tauri mobile + `plugins/keystore`（AndroidKeyStore） |
+| server | 不改：设备入网/吊销在 Phase 1 已就绪 |
+| core | 不改：`search` 与配对协议已在 Phase 1/3 就绪 |
 
-## 需要的 ADR
+## 关联 ADR
 
-- 0007：客户端搜索索引的存储选择（桌面 SQLite / Web 内存）与「不上传、不同步」边界的验证方式。
-- 0008：Web 临时端密钥生命周期（内存 + 15 分钟会话 + 刷新重配对的取舍）。
+- 0002：B+ 逐请求签名（不做 bearer 双栈）。
+- 0006：Yjs 持久化顺序（客户端编辑器与 `/ws`）。
+- 0008：Android 客户端方案（Tauri mobile + AndroidKeyStore）。
 
-## 待确认
+## 实现选择
 
-- UI 组件库、Markdown 编辑器（CodeMirror 6 候选）；Android 构建环境（JDK/SDK/NDK 版本）。
+- UI：手写 React + 原生控件，不引入组件库。
+- 编辑器：`<textarea>` 纯文本编辑（Markdown 原文），不做渲染预览。
+- 本地索引：Web/桌面均为内存索引，不落盘。
+- Android：JDK 17、Android platform 36、build-tools 36.0.0、NDK 26.3.11579264（CI 安装）。
