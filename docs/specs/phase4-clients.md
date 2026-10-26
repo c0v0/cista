@@ -24,8 +24,15 @@
     MK/设备私钥只存在内存，保存带 `If-Match`，409 只提示不覆盖。
   - 端到端（无浏览器）：`web/src/lib/notesApi.e2e.test.ts` 在真实服务端上跑
     配对 → 加密保存 → 解密读取 → 冲突 → MK 隔离。
-- **未完成**：Android（方案与解除条件见 `docs/adr/0008-android-spike.md`，缺 SDK/NDK 与真机）；
-  桌面/移动原生能力（文件选择、Keychain/Keystore）未接。
+  - **服务器地址初始化**：`web/src/pages/ServerSetupPage.tsx` +
+    `web/src/lib/serverSettings.ts`。原生端（桌面/Android）未配置前不得进入配对/分享页；
+    Web 默认同源。地址存 `localStorage:cista.server.base`，可「测试连接」（`/healthz`）、
+    随时更换；换服务器会锁定会话。测试：13 项单元 + 4 项 jsdom 渲染/交互
+    （`web/src/App.test.tsx`）。
+  - **Android 已接 AndroidKeyStore**（`plugins/keystore`），CI 构建并签名 APK，
+    模拟器安装/启动步骤已通过。
+- **未完成**：真机验收（`adb install` 到真实设备、旧版本升级、Keystore 别名稳定性）；
+  桌面系统文件选择器（当前用页面内 `<input type="file">`）；外部安全评审。
 - **验收方式**：逻辑与协议用单元测试 + 跨语言 KAT + 真服务端 e2e 覆盖；
   布局与交互的目视验收属于发布检查（`phase6-hardening.md` §4），不写入仓库。
 
