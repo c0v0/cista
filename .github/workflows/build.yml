@@ -305,31 +305,58 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: List downloaded assets
+        run: find dist -type f -printf '%p %s\n' | sort
       - name: Sign assets (GPG)
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "no GPG key configured; publishing unsigned"
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "::warning::GPG_PRIVATE_KEY 未配置，发布不签名"
             exit 0
           fi
+          echo "key_chars=${#GPG_PRIVATE_KEY} pass_chars=${#GPG_PASSPHRASE}"
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           mkdir -p "$GNUPGHOME"
           chmod 700 "$GNUPGHOME"
-          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          printf '%s\n' "$GPG_PRIVATE_KEY" > "$RUNNER_TEMP/release-key.asc"
+          if ! gpg --batch --import "$RUNNER_TEMP/release-key.asc"; then
+            echo "::error::GPG 私钥导入失败：GPG_PRIVATE_KEY 需为完整 armored 私钥"
+            exit 1
+          fi
           FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+          echo "fingerprint=$FPR"
           cd dist
-          sha256sum * > SHA256SUMS
-          for f in *.deb SHA256SUMS; do
-            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-              --armor --detach-sign "$f"
+          sha256sum ./* > SHA256SUMS
+          for f in ./*.deb ./SHA256SUMS; do
+            if ! gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --armor --detach-sign "$f"; then
+              echo "::error::签名失败：$f（检查 GPG_PASSPHRASE）"
+              exit 1
+            fi
           done
           gpg --armor --export "$FPR" > cista-release-public.asc
           ls -l
           echo "signed with $FPR"
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/**
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists; uploading with --clobber"
+          else
+            if ! gh release create "$TAG" --title "$TAG" --generate-notes; then
+              echo "::error::gh release create 失败"
+              exit 1
+            fi
+          fi
+          shopt -s nullglob
+          for f in dist/*; do
+            if ! gh release upload "$TAG" "$f" --clobber; then
+              echo "::error::gh release upload 失败：$f"
+              exit 1
+            fi
+          done
+          gh release view "$TAG" --json assets --jq '.assets[].name'
