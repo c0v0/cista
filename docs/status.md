@@ -5,10 +5,20 @@
 | 端 | 用户端代码 | 构建/打包 | 说明 |
 |---|---|---|---|
 | 服务端 | ✅ 完成 | ✅ 自动（Linux/Windows） | 认证、笔记、分享、Yjs、归档、限速、备份/恢复脚本 |
-| Web | ✅ 完成 | ✅ 自动（`web/dist`） | 分享页、配对、笔记编辑器、附件 |
-| Linux 桌面 | ✅ 完成 | ✅ 自动（deb + AppImage） | 同一 SPA + Tauri 壳；钥匙串（Secret Service） |
-| Windows 桌面 | ✅ 完成 | ✅ 自动（nsis 安装包） | 同一 SPA + Tauri 壳；钥匙串（Credential Manager） |
-| Android | ✅ 已接 AndroidKeyStore | ✅ CI 构建 APK（`android-apk`） | 重启/升级不丢密钥；Kotlin 编译由 CI 首次验证 |
+| Web | ✅ 完成 | ✅ 自动（`web/dist`） | 分享页、配对、笔记编辑器、附件；首次启动可填服务器地址 |
+| Linux 桌面 | ✅ 完成 | ✅ 自动（deb + AppImage） | 同一 SPA + Tauri 壳；钥匙串（Secret Service）；首次启动强制填服务器 |
+| Windows 桌面 | ✅ 完成 | ✅ 自动（nsis 安装包） | 同一 SPA + Tauri 壳；钥匙串（Credential Manager）；首次启动强制填服务器 |
+| Android | ✅ 已接 AndroidKeyStore | ✅ CI 构建 APK（`android-apk`） | 重启/升级不丢密钥；首次启动强制填服务器；Kotlin 编译由 CI 验证 |
+
+## 客户端服务器地址
+
+- 实现：`web/src/pages/ServerSetupPage.tsx` + `web/src/lib/serverSettings.ts`
+  （校验、探测 `/healthz`、localStorage 持久化）。
+- 原生端（桌面/Android）未配置时**不能进入配对/分享页**，必须先保存地址；
+  Web 端默认同源，可改成跨域地址。
+- 优先级：用户保存值 > 构建期 `VITE_API_BASE` > 同源。
+- 换服务器 = 换身份：当前 session 会被锁定，需要重新配对。
+- 单元测试：`web/src/lib/serverSettings.test.ts`（13 项）。
 
 ## Android 还差什么
 

@@ -202,6 +202,12 @@
 可选跨域：前端 B（静态 SPA）+ 后端 A；此时启用 CORS。代码不得假设一定分域。
 
 - 前端用 `apiBase` 配置：同源为空/相对路径；跨域时为 A。
+- **每个客户端首次启动必须能填写服务器地址**（`web/src/pages/ServerSetupPage.tsx`）：
+  原生端（桌面/Android）在 WebView 里没有真实站点 origin，因此未配置前不得进入配对/分享页；
+  Web 端默认同源，也可改成跨域地址。地址优先级：用户保存值（`localStorage:cista.server.base`）
+  > 构建期 `VITE_API_BASE` > 同源；只接受 `http(s)` origin（可带路径前缀），
+  拒绝账号密码/query/fragment；「测试连接」只请求 `<base>/healthz`，不带任何凭据；
+  修改地址等同换身份，当前内存会话立即丢弃。
 - 分享链接始终指向前端 origin；同源/跨域都不变。
 - 跨域：只允许 B 的 origin；允许 `Authorization/X-Share-Token/X-Device-Id/X-Nonce/X-Timestamp/X-Signature/Content-Type/Range/Idempotency-Key`；暴露 `Content-Disposition/Content-Range/Accept-Ranges`；**不开 credentials**。
 - 鉴权：短会话标识（内存）+ 每请求 B+ 签名；不用 cookie；刷新即重配对。

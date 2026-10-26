@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### 客户端
+- 新增「连接服务器」初始化页（Web / 桌面 / Android 共用）：原生端首次启动强制填写地址，
+  可「测试连接」（`GET /healthz`）、选同源（Web）、随时在页脚/配对页更换；地址存
+  `localStorage:cista.server.base`，换服务器会锁定当前会话。
+- 分享落地页支持跨域部署（`ShareClient` 接收 `apiBase`）。
+
+### 部署
+- `deploy/Caddyfile` 同时托管 `web/dist`（`try_files` 回退 `index.html`）与反代
+  `/api/*`、`/public/*`、`/healthz`、`/ws`，并加 CSP/HSTS 头。
+
+### 工程 / 开源
+- 补 `CODE_OF_CONDUCT.md`、`.github/PULL_REQUEST_TEMPLATE.md`、feature request 模板、
+  issue 模板配置、`.github/CODEOWNERS`、`.editorconfig`、`docs/README.md` 文档索引；
+  README 增加 CI/Release/License 徽章与「客户端连接服务器」章节。
+
 ## [0.1.0] - 2026-10-24
 
 首个可用版本：单实例、单租户、自托管。

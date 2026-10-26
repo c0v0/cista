@@ -1,0 +1,9 @@
+# 默认由唯一维护者审查；新增协作者后改成具体账号。
+* @c0v0
+
+# 安全与发布相关路径必须由维护者确认
+/SECURITY.md @c0v0
+/.github/workflows/ @c0v0
+/deploy/ @c0v0
+/scripts/backup.sh @c0v0
+/scripts/restore-drill.sh @c0v0

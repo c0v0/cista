@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞（私密报告）
+    url: https://github.com/c0v0/cista/security/advisories/new
+    about: 请不要用公开 issue 报告安全漏洞，见 SECURITY.md
+  - name: 部署与运维问题
+    url: https://github.com/c0v0/cista/blob/main/README.md
+    about: 先看 README 的「快速开始 / 部署与运维」与 docs/status.md

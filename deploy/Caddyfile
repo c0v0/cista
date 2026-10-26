@@ -1,38 +1,61 @@
 # cista 反代配置（Caddy 2）
 #
-# 职责：TLS/HSTS、请求体上限、超时、WebSocket 不缓冲、访问日志。
+# 职责：TLS/HSTS、请求体上限、静态 SPA、API/WS 反代、访问日志。
 # 分享 token 只在 `Authorization: Share` 头里，因此 URI 不含长期凭据；
 # 单文件下载票据（45s、单对象）在 query 里——若你长期保存访问日志，
 # 需要在日志管道里对 query 脱敏或关闭 URI 记录（本文件不使用未经核实的过滤指令）。
 #
-# 部署：把 example.com 换成真实域名；后端默认 127.0.0.1:8787（CISTA_BIND）。
+# 部署：把 example.com 换成真实域名；把 /var/www/cista 换成 `web/dist` 的路径；
+# 后端默认 127.0.0.1:8787（CISTA_BIND）。这样同一个域名同时提供 SPA 与 API，
+# 客户端安装后选「使用当前站点（同源）」即可，无需配置跨域。
 
 example.com {
 	encode zstd gzip
-
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		# SPA 只需要连自己的源；分享页要下载 blob（blob:）与内联样式。
+		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
 		-Server
 	}
-
-	# 单文件上限 100 MiB + 信封开销
+	# 单文件上限 100 MiB + 信封开销（对 API 与上传生效；静态文件不受影响）
 	request_body {
 		max_size 110MB
 	}
 
+	# API：与路由表一一对应（crates/server/src/lib.rs）
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8787 {
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+	handle /public/* {
+		reverse_proxy 127.0.0.1:8787 {
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+	handle /healthz {
+		reverse_proxy 127.0.0.1:8787
+	}
 	# WebSocket：/ws 关闭代理缓冲（design.md §4.3）
-	@ws path /ws
-	reverse_proxy @ws 127.0.0.1:8787 {
-		flush_interval -1
+	handle /ws {
+		reverse_proxy 127.0.0.1:8787 {
+			flush_interval -1
+		}
 	}
 
-	reverse_proxy 127.0.0.1:8787 {
-		transport http {
-			read_timeout 300s
-			write_timeout 300s
-		}
+	# 静态 SPA：`pnpm -C web build` 的产物；未知路径回 index.html
+	handle {
+		root * /var/www/cista
+		try_files {path} /index.html
+		file_server
 	}
 
 	log {
