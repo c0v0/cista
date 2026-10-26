@@ -10,36 +10,21 @@
 
 设计、决策与验收标准见 `docs/design.md`、`docs/specs/`、`docs/adr/`，文档导读见 [`docs/README.md`](docs/README.md)。
 
-## 当前状态（2026-10-24）
-已完成的部分：
+## 功能
 
-| 阶段 | 内容 | 证据 |
-|---|---|---|
-| Phase 0 | 工作区、CI 草案、ADR 0001–0009、Phase 规格、门禁脚本 | 仓库结构 |
-| Phase 1 | `cista-core` 加密/签名/同步状态机、双库、笔记 CRUD + 增量同步、B+ 中间件 | core 37 + notes 8 + authz 10 + healthz 3 |
-| Phase 2 | 分享链接（file/workspace/口令/次数/过期）、两步下载票据、410、配额、共享库隔离、共享 blob 静态加密 | sharing 16 项 |
-| Phase 3 | Yjs 文档、快照 + 尾部持久化、`/ws` 握手（分享/所有者）、只读丢弃 | yjs 7 项 + ws_e2e 1 项 |
-| Phase 5（部分） | 归档/隔离区、恢复演练（restic 实跑）、`cista-server gc` | drill 记录、gc 1 项 |
-| Phase 6（部分） | IP/设备/链接限速 + 认证失败退避、分页硬上限、共享上传流式写入、日志脱敏、依赖策略、CORS | ratelimit 4 + sharing 16 + logging 1 + cors 3 + deny ok |
-| Web/桌面 SPA | 访客分享页、分享客户端、本地搜索索引；**配对 + 笔记编辑器**（B+ 签名、MK/CK 端到端、MK 仅内存） | web 95 项（含 KAT 互操作 + 服务器地址 UI 组件测试）+ 真服务端 e2e + vite build |
-| 门禁 | `./scripts/verify.sh`（web build → rustfmt → clippy → test → deny → web tests） | 脚本即协议 |
-
-**桌面端（Tauri 2）**：壳已接通 `web/dist`；编译需要 GTK/WebKit 开发包
-（`libwebkit2gtk-4.1-dev`、`libgtk-3-dev` 等，见 `apps/desktop`）。
-
-**尚未完成**：
-- **Android**：方案与结论见 `docs/adr/0008-android-spike.md`；缺 SDK/NDK 与真机，未验证，
-  发布检查该项保持未通过。
-- **桌面/移动原生能力**：系统钥匙串桥已实现（Tauri 命令 `secret_save/load/delete` + Web 侧
-  `native.ts` 与 `rememberedDevice.ts`），只允许存**设备种子**，MK 永不入系统凭据库。
-  桌面配对页已接：刷新后复用已记住的设备，只需粘贴恢复码；系统文件选择器与安装包打包未做
-  （附件用页面内的 `<input type="file">`，Web/桌面都能用）。
-  Web 端密钥仍只在内存，刷新即锁定。
-- **Phase 6 剩余**：外部安全评审（未通过不开放公网分享）、反向代理侧全局限速
-  （应用层 `ip:<peer>` 桶已兜底）。
+| 模块 | 内容 |
+|---|---|
+| 服务端 | axum + 两份 SQLite（`private.db` / `shared.db`），单二进制；分享路由只持有共享库连接 |
+| 私有笔记 | B+ 逐请求签名、XChaCha20-Poly1305 端到端加密、`If-Match` 并发控制、增量同步、设备入网/吊销 |
+| 分享 | 单文件 / 工作区、可选口令、次数与过期、两步下载票据、只读强制、三层配额、共享 blob 静态加密 |
+| 协作 | Yjs 文档、`/ws` 握手（所有者/分享）、只读连接丢弃 update、快照 + 尾部持久化 |
+| 运维 | 归档/隔离区/恢复、`cista-server gc`、限速与认证退避、结构化脱敏日志、CORS 白名单 |
+| 客户端 | Web / Linux / Windows / Android 共用一套 SPA：首次启动填服务器地址、配对、笔记编辑器、附件、本地搜索索引（内存、不落盘） |
+| 原生能力 | Tauri 2 壳 + `plugins/keystore`：桌面走 Secret Service / Credential Manager，Android 走 AndroidKeyStore；只允许存设备种子，MK 不入系统凭据库 |
 
 测试规模：Rust **118 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
 Web **95 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
+门禁 `./scripts/verify.sh`：web build → rustfmt → clippy → test → deny → web tests。
 
 数据边界与删除流程见 `docs/privacy.md`。
 
@@ -122,10 +107,3 @@ deploy/         systemd unit/timer、Caddyfile（静态站点 + API 反代）
 - 漏洞报告（请勿开公开 issue）：`SECURITY.md`
 - 变更记录：`CHANGELOG.md`
 - 许可证：MIT（见 `LICENSE`）
-
-## 开源项目 ≠ 运营公开实例
-
-仓库本身按普通开源项目提供（MIT、可自建、CI + 测试 + 发布包）。若你把它跑成**公开服务**，
-以下属于**运营者责任**，不是项目交付门槛：可用性监控与告警、备份 timer 的真实运行、
-按自身合规要求做安全评审、以及移动端在真实设备上的验收。
-项目文档不宣称已完成上述运营动作。

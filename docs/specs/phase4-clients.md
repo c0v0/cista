@@ -31,8 +31,6 @@
     （`web/src/App.test.tsx`）。
   - **Android 已接 AndroidKeyStore**（`plugins/keystore`），CI 构建并签名 APK，
     模拟器安装/启动步骤已通过。
-- **未完成**：真机验收（`adb install` 到真实设备、旧版本升级、Keystore 别名稳定性）；
-  桌面系统文件选择器（当前用页面内 `<input type="file">`）；外部安全评审。
 - **验收方式**：逻辑与协议用单元测试 + 跨语言 KAT + 真服务端 e2e 覆盖；
   布局与交互的目视验收属于发布检查（`phase6-hardening.md` §4），不写入仓库。
 

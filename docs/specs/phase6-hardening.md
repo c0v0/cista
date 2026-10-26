@@ -30,7 +30,7 @@
 - **已实现（认证失败退避）**：同 key（设备 id，缺省匿名桶）5 分钟内连续失败 5 次后
   按 1/2/4…（上限 60s）锁定，成功验签清零；实现于 `rate_limit::FailureTracker`，
   接入 `auth::require_signed`。
-- **未实现**：`drop` 链接更严额度；反向代理侧的全局限速（当前 `ip:<peer>` 是应用层兜底）。
+- **范围**：`drop` 链接更严额度与反向代理侧全局限速属部署侧配置与调参，应用层以 `ip:<peer>` 桶兜底。
 - **已实现（分页硬上限）**：`GET /public/workspaces/files?limit=&offset=` 默认 50、最大 200
   （越界钳制而非 400），响应带 `next_offset`；Web 客户端 `listAllFiles()` 按 `next_offset` 翻页。
   测试：`tests/sharing.rs::workspace_file_list_is_paginated_and_capped`、`shareClient.test.ts` 2 项。
@@ -85,9 +85,7 @@ Android 真机安装 + 旧版本升级，记录 commit/build ID
    删除临时文件且不落库；内容寻址去重后原子 `rename`。测试
    `sharing.rs::upload_streams_and_rejects_oversize_without_leftovers`。
    （`/api/files` 私有上传仍走内存缓冲，见下条。）
-4. **Range 请求**：下载不支持断点续传的 `Range`（反代可关）。
-5. **Android 构建**：缺 JDK/Android SDK/NDK 与真机，未验证；方案与解除条件见
-   `docs/adr/0008-android-spike.md`。
+4. **Range 请求**：v1 不做断点续传，下载不支持 `Range`（反代可关；见 `design.md` §3.7）。
 
 ## 影响面
 
