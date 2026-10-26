@@ -65,6 +65,15 @@ Web 端默认同源、也可改成跨域地址：
   产物在 `target/release/bundle/`）。安装包不提交进仓库。
 - 自动构建：`.github/workflows/build.yml` 在 push/PR 时编译服务端（Linux/Windows）与桌面包；
   推送 `v*` tag 时把产物自动挂到 Release。
+- 校验发布产物（从 Release 下载 `cista-release-public.asc`、`SHA256SUMS`、`SHA256SUMS.asc`）：
+  ```bash
+  gpg --import cista-release-public.asc
+  gpg --verify SHA256SUMS.asc SHA256SUMS
+  sha256sum -c SHA256SUMS --ignore-missing
+  # 单独校验某个 deb 的签名
+  gpg --verify Cista_0.1.0_debian13_amd64.deb.asc Cista_0.1.0_debian13_amd64.deb
+  ```
+  密钥指纹见 `cista-release-public.asc`；签名由 CI 在发布 job 内用仓库 secret 完成。
 - 共享 blob 静态加密：生产必须设置 `CISTA_STATIC_KEY`（32 字节 hex，与其它钥匙分开托管）；
   未设置时共享文件明文落盘，仅适合开发/测试（见 ADR 0009）。
 - 升级 / 回滚：

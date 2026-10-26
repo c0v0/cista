@@ -305,6 +305,29 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Sign assets (GPG)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "no GPG key configured; publishing unsigned"
+            exit 0
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+          cd dist
+          sha256sum * > SHA256SUMS
+          for f in *.deb SHA256SUMS; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --armor --detach-sign "$f"
+          done
+          gpg --armor --export "$FPR" > cista-release-public.asc
+          ls -l
+          echo "signed with $FPR"
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/**
