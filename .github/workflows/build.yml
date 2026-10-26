@@ -210,7 +210,7 @@ jobs:
           KEY_PASSWORD="${KEY_PASSWORD//$\n/}"
           BT="$ANDROID_HOME/build-tools/36.0.0"
           ALIAS=$("$JAVA_HOME/bin/keytool" -list -keystore "$RUNNER_TEMP/cista-release.jks" \
-            -storepass "$KS_PASSWORD" 2>/dev/null | awk '/PrivateKeyEntry/{print $1; exit}')
+            -storepass "$KS_PASSWORD" 2>/dev/null | awk -F, '/PrivateKeyEntry/{print $1; exit}')
           echo "keystore alias: $ALIAS"
           for apk in $(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*.apk"); do
             aligned="${apk%-unsigned.apk}-aligned.apk"
