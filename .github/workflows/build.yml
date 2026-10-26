@@ -38,7 +38,7 @@ jobs:
           if-no-files-found: error
 
   web:
-    name: web bundle
+    name: web (test + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,12 +52,8 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm -C web install --frozen-lockfile
       - run: pnpm -C web typecheck && pnpm -C web test -- --run
+      # 只验证可构建；dist 由桌面端在各自 job 内构建并嵌入，不发布到 Release。
       - run: pnpm -C web build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cista-web
-          path: web/dist
-          if-no-files-found: error
 
   android-core:
     name: android core (arm64)
