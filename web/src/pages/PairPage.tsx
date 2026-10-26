@@ -6,19 +6,23 @@ import type { Session } from "../lib/notesApi";
 import { enrollDevice } from "../lib/notesApi";
 import { fromRecoveryCode, generateKey, recoveryCode } from "../lib/noteCrypto";
 import { rememberDevice, rememberMasterKey, restoreDevice } from "../lib/rememberedDevice";
+import { describeServer } from "../lib/serverSettings";
 
 /**
  * 配对页：bootstrap token 只能入网一次；私钥种子与 MK 都只留在内存。
  *
  * - 新设备：生成 32B Ed25519 种子 → 入网 → 生成 MK（并展示恢复码，用户自行离线保存）。
  * - 已有恢复码：粘贴即可用同一把 MK 解密历史笔记。
+ * - 服务器地址在这里可见、可更换（首次启动已在 `#/setup` 填过）。
  */
 export function PairPage({
   apiBase,
   onPaired,
+  onChangeServer,
 }: {
   apiBase: string;
   onPaired: (session: Session) => void;
+  onChangeServer?: () => void;
 }) {
   const [bootstrap, setBootstrap] = useState("");
   const [name, setName] = useState("我的设备");
@@ -81,6 +85,17 @@ export function PairPage({
   return (
     <section>
       <h1>配对这台设备</h1>
+      <p className="hint">
+        服务器：<code>{describeServer(apiBase)}</code>
+        {onChangeServer ? (
+          <>
+            {" · "}
+            <button type="button" onClick={onChangeServer}>
+              更换服务器
+            </button>
+          </>
+        ) : null}
+      </p>
       <p className="hint">
         主密钥只保存在本页内存里：刷新即锁定，需要粘贴恢复码重新解锁。
         {store

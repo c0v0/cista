@@ -30,7 +30,7 @@ function saveBlob(blob: Blob, name: string): void {
  * 不变量：token 只在 `ShareClient` 的 `Authorization` 头里；页面 URL 只有 fragment，
  * 不写 query/localStorage（`design.md` §3.2）。
  */
-export function SharePage({ target }: { target: ShareTarget }) {
+export function SharePage({ target, apiBase = "" }: { target: ShareTarget; apiBase?: string }) {
   const [meta, setMeta] = useState<ShareMeta | null>(null);
   const [files, setFiles] = useState<PublicFileEntry[]>([]);
   const [passphrase, setPassphrase] = useState("");
@@ -43,7 +43,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
       setBusy(true);
       setError(null);
       try {
-        const client = new ShareClient(fetch, target.token, { passphrase: pass });
+        const client = new ShareClient(fetch, target.token, { apiBase, passphrase: pass });
         const loaded = await client.meta(target.kind);
         setMeta(loaded);
         setNeedsPassphrase(loaded.requires_passphrase && !pass);
@@ -59,7 +59,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
         setBusy(false);
       }
     },
-    [target.kind, target.token],
+    [target.kind, target.token, apiBase],
   );
 
   useEffect(() => {
@@ -71,6 +71,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
     setError(null);
     try {
       const client = new ShareClient(fetch, target.token, {
+        apiBase,
         passphrase: passphrase || undefined,
       });
       const confirmed = await client.confirm();
@@ -88,6 +89,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
     setError(null);
     try {
       const client = new ShareClient(fetch, target.token, {
+        apiBase,
         passphrase: passphrase || undefined,
       });
       saveBlob(await client.downloadFile(entry.id), downloadName(entry.name));
@@ -103,6 +105,7 @@ export function SharePage({ target }: { target: ShareTarget }) {
     setError(null);
     try {
       const client = new ShareClient(fetch, target.token, {
+        apiBase,
         passphrase: passphrase || undefined,
       });
       await client.upload(file.name, file, file.type || "application/octet-stream");

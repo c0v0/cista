@@ -154,3 +154,30 @@ footer {
 small {
   opacity: 0.65;
 }
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ghost {
+  border-style: dashed;
+}
+
+/* 输入框在 .stack 之外（例如服务器设置页的单行控件）也要有统一外观 */
+input[type="url"],
+input[type="text"] {
+  font: inherit;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+}
