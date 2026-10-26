@@ -23,7 +23,7 @@
 | 原生能力 | Tauri 2 壳 + `plugins/keystore`：桌面走 Secret Service / Credential Manager，Android 走 AndroidKeyStore；只允许存设备种子，MK 不入系统凭据库 |
 
 测试规模：Rust **118 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
-Web **95 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
+Web **96 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
 门禁 `./scripts/verify.sh`：web build → rustfmt → clippy → test → deny → web tests。
 
 数据边界与删除流程见 `docs/privacy.md`。

@@ -64,6 +64,15 @@ describe("ShareClient", () => {
     expect(call?.url.includes(TOKEN)).toBe(false);
   });
 
+  it("跨域部署时请求带 apiBase 前缀", async () => {
+    const { transport, calls } = recordingTransport(() => jsonResponse(200, META));
+    const client = new ShareClient(transport, TOKEN, { apiBase: "https://api.example.com/" });
+    await client.meta("workspace");
+
+    expect(calls[0]?.url).toBe("https://api.example.com/public/workspaces/meta");
+    expect(new URL(calls[0]?.url ?? "").pathname.includes(TOKEN)).toBe(false);
+  });
+
   it("拒绝把 token 拼进 path", async () => {
     const { transport } = recordingTransport(() => jsonResponse(200, META));
     const client = new ShareClient(transport, TOKEN);
