@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # cista 服务端镜像：多阶段构建，运行层不带编译器/工具链。
-FROM rust:1.85-bookworm AS builder
+FROM rust:1-bookworm AS builder
 WORKDIR /src
 
 RUN apt-get update \

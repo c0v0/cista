@@ -67,7 +67,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build server image
-        run: docker build -t cista:ci .
+        run: |
+          if ! docker build --progress=plain -t cista:ci . > /tmp/build.log 2>&1; then
+            echo "::error::docker build 失败: $(tail -15 /tmp/build.log | tr '\n' ' ')"
+            tail -80 /tmp/build.log
+            exit 1
+          fi
+          tail -5 /tmp/build.log
       - name: Smoke test /healthz
         run: |
           docker run -d --name cista-ci \
