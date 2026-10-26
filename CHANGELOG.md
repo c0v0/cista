@@ -16,6 +16,8 @@
 - 补 `CODE_OF_CONDUCT.md`、`.github/PULL_REQUEST_TEMPLATE.md`、feature request 模板、
   issue 模板配置、`.github/CODEOWNERS`、`.editorconfig`、`docs/README.md` 文档索引；
   README 增加 CI/Release/License 徽章与「客户端连接服务器」章节。
+- 部署：新增多阶段 `Dockerfile` 与 `compose.yaml`（`docker compose up -d --build`），CI 增加 docker job 构建镜像并冒烟 `/healthz`。
+- 文档：新增英文 `README.en.md` 与语言切换；修正 design 中的 `/web` 路由与 `notes` 服务名。
 - Release 只挂可执行产物（服务端二进制、Debian/Ubuntu 两个 deb、AppImage、NSIS 安装包、签名 APK），
   并附 `SHA256SUMS` 与 GPG 分离签名（`SHA256SUMS.asc`、每个 deb 的 `.asc`）和公钥；不再附带 `web/dist`
   的 html/js/css；`web` job 仅保留 typecheck/test/build 验证。

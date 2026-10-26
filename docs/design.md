@@ -66,7 +66,6 @@
 ```text
 /api/*       公网 + B+ 逐请求签名
 /public/*    公网：分享读写/上传/下载
-/web/*       公网：配对、临时会话
 /ws          公网：Yjs；首条消息认证或 30 秒 ticket
 /healthz     公网部署必需：仅 200（systemd/Docker healthcheck / 外部 uptime）
 运维         仅 SSH（宿主机）；不提供远程管理 API / 管理后台
@@ -198,7 +197,7 @@
 
 ### 4.2 部署形态（同源或跨域，二者都支持）
 
-默认同源：`https://<frontend>`，反代 `/api`、`/public`、`/web`、`/ws` 到后端；不需要 CORS。
+默认同源：`https://<frontend>`，反代 `/api`、`/public`、`/ws`、`/healthz` 到后端；不需要 CORS。
 可选跨域：前端 B（静态 SPA）+ 后端 A；此时启用 CORS。代码不得假设一定分域。
 
 - 前端用 `apiBase` 配置：同源为空/相对路径；跨域时为 A。
@@ -222,13 +221,13 @@
 - 约束：代码与配置不得要求 Docker、前后端分域或 VPN；Docker/分域只是支持，VPN 不采用。
 - Caddy：TLS/HSTS/请求体限制/超时/限速；WebSocket 代理关闭缓冲。
 - 若用容器：非 root、只读根文件系统、`no-new-privileges`、内存/CPU/PID 限制；若用 systemd：专用用户、只读数据目录、limits。
-- 升级：systemd 替换二进制 + `systemctl restart notes`；Docker `docker compose pull && docker compose up -d`；升级前备份；保留上一个版本。
-- 日志：systemd `journalctl -u notes` 或 Docker logs；结构化 JSON；日志脱敏；记录链接/设备/上传/归档操作（token 哈希、IP 哈希、字节、状态）；轮转约 30 天；不记正文/token 明文；不建审计表/审计 UI、不建 metrics。
+- 升级：systemd 替换二进制 + `systemctl restart cista`；Docker `docker compose pull && docker compose up -d`；升级前备份；保留上一个版本。
+- 日志：systemd `journalctl -u cista` 或 Docker logs；结构化 JSON；日志脱敏；记录链接/设备/上传/归档操作（token 哈希、IP 哈希、字节、状态）；轮转约 30 天；不记正文/token 明文；不建审计表/审计 UI、不建 metrics。
 - 合规：地区未定；设计保持地区无关；中国大陆需 ICP/公安备案。
 
 ### 4.4 运维（最小）
 
-- SSH 到服务器；systemd `systemctl restart notes`，或 Docker `docker compose up -d` / `docker compose restart`。
+- SSH 到服务器；systemd `systemctl restart cista`，或 Docker `docker compose up -d` / `docker compose restart`。
 - 配置手动改 `.env` 或配置文件，重启生效；不做配置 API、热加载、管理后台。
 - 备份/恢复由 timer 调用脚本（`VACUUM INTO` + blob/restic），不做常驻备份服务。
 - 可用性：外部 uptime 每 5 分钟打 `/healthz`，告警到所有者邮箱/手机；不做 `/readyz`、`/metrics`、Prometheus/Grafana。
@@ -353,9 +352,9 @@ DELETE /public/workspaces/{token}/files/{id}
 GET    /public/workspaces/{token}/events   SSE：只发 rev
 
 # 配对
-POST   /web/pair/start
-POST   /web/pair/approve
-POST   /web/pair/session
+POST   /api/devices/enroll                   B+ 签名 + bootstrap token
+POST   /api/devices/{id}/revoke             设备吊销
+
 
 # 实时
 WS     /ws                            首条消息：token + mode
@@ -440,7 +439,7 @@ restic backup /srv/cista/blob /backup/db.sqlite /srv/cista/config
 - 客户端本地文件索引（桌面/手机 SQLite `LIKE`；Web 内存）；私有搜索不出端；共享搜索只查共享表；`source_type` 取 `note_attachment`（`drive_node` 为保留值）。
 - 结构化日志，轮转约 30 天（journald 或 Docker）；不建审计表；过渡区不自动删除，人工清理。
 - 单文件 100 MiB；上传白名单；配额百分比；list/搜索分页，按 IP + 设备/链接限速。
-- `/api`、`/public`、`/web`、`/ws`；`/healthz` 公网必需（外部 uptime）。
+- `/api`、`/public`、`/ws`；`/healthz` 公网必需（外部 uptime）。
 - 备份：每日 systemd timer/cron；restic 7 daily / 4 weekly / 6 monthly；季度恢复演练；不建常驻备份服务。
 - 告警：外部 uptime → 所有者邮箱/手机；不建 metrics；关键账号留恢复码，可选第二所有者。
 - 预算：VPS/域名/备份/告警约 $20–30/月；不承诺 SLA。

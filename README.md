@@ -1,5 +1,7 @@
 # cista（私匣）
 
+简体中文 | [English](README.en.md)
+
 [![ci](https://github.com/c0v0/cista/actions/workflows/ci.yml/badge.svg)](https://github.com/c0v0/cista/actions/workflows/ci.yml)
 [![build](https://github.com/c0v0/cista/actions/workflows/build.yml/badge.svg)](https://github.com/c0v0/cista/actions/workflows/build.yml)
 [![release](https://img.shields.io/github/v/release/c0v0/cista?include_prereleases&sort=semver)](https://github.com/c0v0/cista/releases)
@@ -53,7 +55,7 @@ Web 端默认同源、也可改成跨域地址：
 
 ## 部署与运维
 
-- 默认形态：单二进制 + systemd（`deploy/cista.service`），Docker 只是可选包装。
+- 默认形态：单二进制 + systemd（`deploy/cista.service`）。Docker 也支持：`cp .env.example .env` → `docker compose up -d --build`（镜像见 `Dockerfile`，数据挂载到 `./data`）。
 - 反代：`deploy/Caddyfile`（TLS/HSTS、110MB 请求体上限、WS 不缓冲、JSON 日志）。
 - 备份：`scripts/backup.sh`（`VACUUM INTO` 两份库 + blob 清单 + restic），
   由 `deploy/cista-backup.{service,timer}` 每日触发；失败进 journal。

@@ -61,3 +61,24 @@ jobs:
         with:
           tool: cargo-deny
       - run: bash scripts/verify.sh
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build server image
+        run: docker build -t cista:ci .
+      - name: Smoke test /healthz
+        run: |
+          docker run -d --name cista-ci \
+            -e CISTA_BOOTSTRAP_TOKEN=ci-bootstrap-token \
+            -e CISTA_STATIC_KEY="$(printf 'ab%.0s' $(seq 1 32))" \
+            -p 8787:8787 cista:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz; then echo " healthz ok"; ok=1; break; fi
+            sleep 1
+          done
+          docker logs cista-ci | tail -5
+          docker rm -f cista-ci
+          [ "$ok" = 1 ]
