@@ -305,8 +305,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: List downloaded assets
-        run: find dist -type f -printf '%p %s\n' | sort
+      - name: Flatten downloaded artifacts
+        run: |
+          mkdir -p flat
+          find dist -type f -exec cp -p {} flat/ \;
+          rm -rf dist
+          mv flat dist
+          find dist -type f -printf '%f %s\n' | sort
       - name: Sign assets (GPG)
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
