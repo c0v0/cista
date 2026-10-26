@@ -219,7 +219,9 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
-            APK=$(find apk -name "*.apk" | head -1)
+            adb wait-for-device
+            find . -name "*.apk" -print
+            APK=$(find . -name "*.apk" | head -1)
             echo "installing $APK"
             adb install -r "$APK"
             adb shell am start -W -n com.cista.notes/.MainActivity
