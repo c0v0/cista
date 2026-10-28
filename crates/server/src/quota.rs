@@ -125,6 +125,24 @@ pub async fn release(
     Ok(())
 }
 
+/// 只释放工作区配额：文件被软删、但共享副本仍被单文件链接等引用时使用。
+pub async fn release_workspace(
+    tx: &mut Transaction<'_, Sqlite>,
+    workspace_id: &str,
+    bytes: u64,
+) -> sqlx::Result<()> {
+    let bytes = i64::try_from(bytes).unwrap_or(i64::MAX);
+    sqlx::query(
+        "UPDATE usage_counters SET bytes = MAX(0, bytes - ?)
+         WHERE scope = 'workspace' AND key = ?",
+    )
+    .bind(bytes)
+    .bind(workspace_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// 只释放实例总量（单文件链接的共享副本）。
 pub async fn release_instance(tx: &mut Transaction<'_, Sqlite>, bytes: u64) -> sqlx::Result<()> {
     let bytes = i64::try_from(bytes).unwrap_or(i64::MAX);

@@ -273,10 +273,11 @@ async fn purge_shared_data(state: &AppState, workspace_id: &str) -> Result<u64, 
         .execute(&mut *tx)
         .await?;
 
-    quota::release(&mut tx, workspace_id, released).await?;
+    // 工作区配额整体释放；实例配额在物理副本删除时逐块释放。
+    quota::release_workspace(&mut tx, workspace_id, released).await?;
 
     let mut remove_files: Vec<String> = Vec::new();
-    for (hash, _) in &files {
+    for (hash, size) in &files {
         sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ? AND scope = 'shared'")
             .bind(hash)
             .execute(&mut *tx)
@@ -291,6 +292,7 @@ async fn purge_shared_data(state: &AppState, workspace_id: &str) -> Result<u64, 
                 .bind(hash)
                 .execute(&mut *tx)
                 .await?;
+            quota::release_instance(&mut tx, u64::try_from(*size).unwrap_or(0)).await?;
             remove_files.push(hash.clone());
         }
     }

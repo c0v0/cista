@@ -139,9 +139,17 @@ async fn ip_limit(
     } else {
         peer_ip.map(|ip| ip.to_string())
     };
+    // 按路径首段分桶：/api 的洪泛不应挤占 /public 或 /ws 的额度。
+    let route = request
+        .uri()
+        .path()
+        .split('/')
+        .nth(1)
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("root");
     let key = match client {
-        Some(ip) => format!("ip:{ip}"),
-        None => "ip:unknown".to_string(),
+        Some(ip) => format!("ip:{ip}:{route}"),
+        None => format!("ip:unknown:{route}"),
     };
     state
         .rate

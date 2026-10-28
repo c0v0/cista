@@ -447,7 +447,8 @@ pub async fn delete(
         // 并发 DELETE：只有真正把行标为删除的请求才能释放配额/减引用。
         return Err(AppError::NotFound);
     }
-    quota::release(&mut tx, &link.object_id, u64::try_from(size).unwrap_or(0)).await?;
+    // 工作区配额随软删释放；实例配额只在物理副本真的删除时释放（否则会与链接回收重复扣减）。
+    quota::release_workspace(&mut tx, &link.object_id, u64::try_from(size).unwrap_or(0)).await?;
     // 链接配额按 `uploads` 生命周期累计；删除文件时同步清掉对应行。
     sqlx::query("DELETE FROM uploads WHERE workspace_id = ? AND blob_hash = ?")
         .bind(&link.object_id)
@@ -469,6 +470,7 @@ pub async fn delete(
             .bind(&blob_hash)
             .execute(&mut *tx)
             .await?;
+        quota::release_instance(&mut tx, u64::try_from(size).unwrap_or(0)).await?;
     }
     let rev: i64 = sqlx::query_scalar("SELECT rev FROM workspace_files WHERE id = ?")
         .bind(&file_id)
