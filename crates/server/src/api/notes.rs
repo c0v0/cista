@@ -43,7 +43,15 @@ pub async fn list(
 
     let mut notes = Vec::with_capacity(rows.len());
     let mut next_since = since;
+    let mut bytes = 0usize;
+    // 500 条 × 6 MiB 会撑爆内存；按字节截断，客户端用 next_since 继续拉。
+    const BATCH_BYTES: usize = 8 * 1024 * 1024;
     for (id, rev, updated_at, sealed_json, seq) in rows {
+        let row_bytes = sealed_json.len() + id.len() + 64;
+        if !notes.is_empty() && bytes + row_bytes > BATCH_BYTES {
+            break;
+        }
+        bytes += row_bytes;
         notes.push(NoteRecord {
             id,
             rev: u64::try_from(rev).unwrap_or(0),
@@ -161,6 +169,11 @@ pub async fn put(
     .bind(updated_at)
     .execute(&mut *tx)
     .await?;
+    // oplog 只为离线设备保留 90 天；更早的历史裁剪掉，避免 DB 无限增长。
+    sqlx::query("DELETE FROM oplog WHERE entity = 'note' AND created_at < ?")
+        .bind(now() - 90 * 86_400)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
 
     Ok((
