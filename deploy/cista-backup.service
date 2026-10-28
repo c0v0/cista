@@ -15,6 +15,8 @@ StandardError=journal
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+# ProtectHome=true 会隐藏 /home/cista；restic 默认缓存放 $HOME/.cache，必须改到备份目录。
+Environment=RESTIC_CACHE_DIR=/srv/cista/backup/restic-cache
 
 # 快照里有分享 token 哈希、口令哈希和可能未加密的共享 blob：权限必须与主服务一致。
 UMask=0077

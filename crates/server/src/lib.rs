@@ -131,7 +131,8 @@ async fn ip_limit(
             .headers()
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok())
-            .and_then(|raw| raw.split(',').next())
+            // 取最后一个条目：反代把真实客户端地址追加在末尾；首个条目可被客户端伪造。
+            .and_then(|raw| raw.rsplit(',').next())
             .map(str::trim)
             .filter(|candidate| candidate.parse::<std::net::IpAddr>().is_ok())
             .map(str::to_string)

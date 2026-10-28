@@ -18,6 +18,8 @@ services:
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
+      # 容器以 uid 10001 运行；宿主机目录必须属于它：
+      #   sudo install -d -o 10001 -g 10001 ./data
       - ./data:/data
     # 容器内无需写根文件系统；可写目录只有 /data 与 /tmp。
     read_only: true

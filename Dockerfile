@@ -24,6 +24,7 @@ COPY --from=builder /src/target/release/cista-server /usr/local/bin/cista-server
 
 ENV CISTA_BIND=0.0.0.0:8787 \
     CISTA_DATA_DIR=/data \
+    CISTA_TRUST_PROXY=1 \
     CISTA_LOG_FORMAT=json
 
 USER cista

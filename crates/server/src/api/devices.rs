@@ -159,7 +159,8 @@ fn enroll_failure_key(state: &AppState, headers: &HeaderMap) -> String {
         headers
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok())
-            .and_then(|raw| raw.split(',').next())
+            // 取最后一个条目（反代追加的真实客户端地址），避免客户端伪造首个条目。
+            .and_then(|raw| raw.rsplit(',').next())
             .map(str::trim)
             .filter(|candidate| candidate.parse::<std::net::IpAddr>().is_ok())
             .unwrap_or("unknown")

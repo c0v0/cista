@@ -55,7 +55,9 @@ Web 端默认同源、也可改成跨域地址：
 
 ## 部署与运维
 
-- 默认形态：单二进制 + systemd（`deploy/cista.service`）。Docker 也支持：`cp .env.example .env` → `docker compose up -d --build`（镜像见 `Dockerfile`，数据挂载到 `./data`）。
+- 默认形态：单二进制 + systemd（`deploy/cista.service`）。Docker 也支持：
+  `cp .env.example .env` → `sudo install -d -o 10001 -g 10001 ./data` → `docker compose up -d --build`
+  （镜像见 `Dockerfile`，容器以 uid 10001 运行，数据挂载到 `./data`）。
 - 反代：`deploy/Caddyfile`（TLS/HSTS、110MB 请求体上限、WS 不缓冲、JSON 日志）。
 - 备份：`scripts/backup.sh`（`VACUUM INTO` 两份库 + blob 清单 + restic），
   由 `deploy/cista-backup.{service,timer}` 每日触发；失败进 journal。
