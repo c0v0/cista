@@ -682,15 +682,7 @@ async fn quota_rejection_leaves_no_orphan_blob() {
 
     let payload = vec![7u8; 128 * 1024];
 
-    let (status, body) = upload(
-        &app,
-        &token,
-        "big.bin",
-        "text/plain",
-        &payload,
-        None,
-    )
-    .await;
+    let (status, body) = upload(&app, &token, "big.bin", "text/plain", &payload, None).await;
     assert_eq!(
         status,
         StatusCode::PAYLOAD_TOO_LARGE,
