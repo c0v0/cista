@@ -633,7 +633,7 @@ async fn shared_blobs_are_encrypted_at_rest_and_decrypt_on_download() {
 }
 
 #[tokio::test]
-async fn ticket_can_be_reused_within_window() {
+async fn ticket_is_single_use() {
     let app = TestApp::new().await;
     let device = app.enroll("desktop").await;
     let blob = app.upload_private_blob(&device, b"retry-bytes").await;
@@ -650,12 +650,13 @@ async fn ticket_can_be_reused_within_window() {
     let confirm: ConfirmResponse = TestApp::json(&body);
     let uri = format!("/public/files/blob?ticket={}", confirm.ticket);
 
-    // 票据 45s 内可重试：断点/重试下载不应第二次就 410。
-    for attempt in 0..2 {
-        let (status, downloaded) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
-        assert_eq!(status, StatusCode::OK, "第 {attempt} 次下载失败");
-        assert_eq!(downloaded, b"retry-bytes");
-    }
+    let (status, downloaded) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(downloaded, b"retry-bytes");
+
+    // 同一票据第二次必须被拒绝；需要重试时重新 confirm 换新票据。
+    let (status, _) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

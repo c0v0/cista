@@ -76,3 +76,10 @@
   `cap_drop: ALL`、内存/PID 限制；新增 `cista-gc.{service,timer}`。
 - Android 签名不再把口令写进 `build.gradle.kts`（改用 apksigner `env:`/`keytool -storepass:env`），
   删除 `scripts/android-signing.py`。
+
+### 审计后补强
+- 单文件下载票据改为**单次使用**（并发下载只有一个成功；需要重试时重新 confirm 换票）。
+- `/api/devices/enroll` 接入失败退避（按反代客户端地址），bootstrap 失败不再无限重试。
+- 实例配额按物理副本释放：删除/归档只释放工作区配额，避免与链接回收重复扣减。
+- IP 限速按路径首段分桶（`/api`、`/public`、`/ws`），单一路由洪泛不再挤占其他面。
+- GitHub Actions 全部固定到 commit SHA（附版本注释），dependabot 继续跟踪。

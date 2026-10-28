@@ -130,6 +130,16 @@ pub async fn blob(
     if ticket_expires <= now() {
         return Err(AppError::Gone);
     }
+    // 票据单次使用：并发下载只有一个请求能删掉这一行。
+    let consumed = sqlx::query("DELETE FROM blob_tickets WHERE ticket_hash = ? AND expires_at > ?")
+        .bind(hash_token(&query.ticket))
+        .bind(now())
+        .execute(state.shared.pool())
+        .await?
+        .rows_affected();
+    if consumed != 1 {
+        return Err(AppError::Unauthorized);
+    }
 
     let name = if link.title.is_empty() {
         "download".to_string()

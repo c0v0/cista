@@ -39,19 +39,32 @@ pub async fn enroll(
         .unwrap_or_default();
 
     let mut bootstrap = false;
-    if let Some(token) = authorization.strip_prefix("Bootstrap ") {
-        let expected = state
-            .cfg
-            .bootstrap_token
-            .as_deref()
-            .ok_or(AppError::Unauthorized)?;
-        if !crate::auth::token_matches(expected, token.trim()) {
-            return Err(AppError::Unauthorized);
-        }
-        bootstrap = true;
-    } else {
-        crate::auth::verify_headers(&state, &headers, &method, &uri, &body).await?;
+    let now_ts = now();
+    let failure_key = enroll_failure_key(&state, &headers);
+    if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
+        return Err(AppError::RateLimited { retry_after_secs });
     }
+    let auth_result: Result<(), AppError> =
+        if let Some(token) = authorization.strip_prefix("Bootstrap ") {
+            match state.cfg.bootstrap_token.as_deref() {
+                Some(expected) if crate::auth::token_matches(expected, token.trim()) => {
+                    bootstrap = true;
+                    Ok(())
+                }
+                _ => Err(AppError::Unauthorized),
+            }
+        } else {
+            crate::auth::verify_headers(&state, &headers, &method, &uri, &body)
+                .await
+                .map(|_| ())
+        };
+    if let Err(error) = auth_result {
+        if matches!(error, AppError::Unauthorized) {
+            state.failures.record(&failure_key, now_ts);
+        }
+        return Err(error);
+    }
+    state.failures.clear(&failure_key);
 
     let mut tx = state.private.pool().begin().await?;
     if bootstrap {
@@ -138,4 +151,20 @@ fn decode_pubkey(raw: &str) -> Result<[u8; 32], AppError> {
         .as_slice()
         .try_into()
         .map_err(|_| AppError::BadRequest("invalid_pubkey"))
+}
+
+/// 入网失败退避的 key：反代部署用客户端地址，直连时共用一个桶。
+fn enroll_failure_key(state: &AppState, headers: &HeaderMap) -> String {
+    let client = if state.cfg.trust_proxy {
+        headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|raw| raw.split(',').next())
+            .map(str::trim)
+            .filter(|candidate| candidate.parse::<std::net::IpAddr>().is_ok())
+            .unwrap_or("unknown")
+    } else {
+        "direct"
+    };
+    format!("enroll:{client}")
 }
