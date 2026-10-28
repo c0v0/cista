@@ -259,7 +259,7 @@ async fn single_file_link_is_two_step_and_capped_to_one_use() {
 }
 
 #[tokio::test]
-async fn concurrent_confirm_consumes_exactly_once() {
+async fn concurrent_downloads_consume_exactly_once() {
     let app = TestApp::new().await;
     let device = app.enroll("desktop").await;
     let blob = app.upload_private_blob(&device, b"race").await;
@@ -272,14 +272,36 @@ async fn concurrent_confirm_consumes_exactly_once() {
         StatusCode::CREATED
     );
 
-    let first = app.public("POST", "/public/files/confirm", &token, b"", &[]);
-    let second = app.public("POST", "/public/files/confirm", &token, b"", &[]);
+    // confirm 不再消费次数；两次 confirm 各自拿到一张单次票据。
+    let mut tickets = Vec::new();
+    for _ in 0..2 {
+        let (status, body) = app
+            .send(app.public("POST", "/public/files/confirm", &token, b"", &[]))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        tickets.push(TestApp::json::<ConfirmResponse>(&body).ticket);
+    }
+
+    let first = app.public(
+        "GET",
+        &format!("/public/files/blob?ticket={}", tickets[0]),
+        &token,
+        b"",
+        &[],
+    );
+    let second = app.public(
+        "GET",
+        &format!("/public/files/blob?ticket={}", tickets[1]),
+        &token,
+        b"",
+        &[],
+    );
     let (a, b) = tokio::join!(app.send(first), app.send(second));
     let successes = [a.0, b.0]
         .iter()
         .filter(|status| **status == StatusCode::OK)
         .count();
-    assert_eq!(successes, 1, "并发 confirm 必须只有一次成功");
+    assert_eq!(successes, 1, "并发下载必须只有一次成功消费链接次数");
 }
 
 #[tokio::test]

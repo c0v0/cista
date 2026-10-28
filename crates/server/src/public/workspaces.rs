@@ -517,8 +517,10 @@ pub async fn download(
 pub async fn events(
     State(state): State<AppState>,
     ShareToken(token): ShareToken,
+    headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
     let link = load_link(&state, &token, ShareKind::Workspace).await?;
+    require_passphrase(&state, &link, &headers).await?;
     let workspace = load_workspace(&state, &link.object_id).await?;
     ensure_public(&workspace)?;
 

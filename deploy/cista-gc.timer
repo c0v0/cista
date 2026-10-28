@@ -1,7 +1,6 @@
 [Unit]
 Description=cista hourly garbage collection
 Documentation=file:/srv/cista/README.md
-Requires=cista-gc.service
 
 [Timer]
 OnBootSec=10min

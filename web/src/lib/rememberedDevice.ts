@@ -41,8 +41,12 @@ export async function restoreDevice(
 
 export async function forgetRememberedDevice(store: SecretStore): Promise<void> {
   const id = localStore()?.getItem(DEVICE_ID_KEY) ?? "";
-  if (DEVICE_ID.test(id)) await store.remove(deviceSecretKey(id));
-  localStore()?.removeItem(DEVICE_ID_KEY);
+  try {
+    if (DEVICE_ID.test(id)) await store.remove(deviceSecretKey(id));
+  } finally {
+    // 即使钥匙串删除失败，也要清掉本机的设备 id，避免换服务器后复用旧身份。
+    localStore()?.removeItem(DEVICE_ID_KEY);
+  }
 }
 
 /** 主密钥（MK）在系统安全存储里的键名；与设备种子分开存放。 */

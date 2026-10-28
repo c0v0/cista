@@ -47,22 +47,8 @@ pub async fn confirm(
     let timestamp = now();
     let expires_at = timestamp + TICKET_TTL_SECS;
 
-    // 原子消费：条件不满足就一行都不改（并发 confirm 只有一次成功）。
-    let affected = sqlx::query(
-        "UPDATE share_links SET used_count = used_count + 1
-         WHERE id = ?
-           AND revoked_at IS NULL
-           AND (expires_at IS NULL OR expires_at > ?)
-           AND (max_uses IS NULL OR used_count < max_uses)",
-    )
-    .bind(&link.id)
-    .bind(timestamp)
-    .execute(state.shared.pool())
-    .await?
-    .rows_affected();
-    if affected == 0 {
-        return Err(AppError::Gone);
-    }
+    // 次数在**下载成功**时消费（见 blob）；confirm 只检查链接仍可用，
+    // 这样一次中断的下载不会白白烧掉一次性链接。
 
     let ticket = new_ticket()?;
     sqlx::query(
@@ -139,6 +125,22 @@ pub async fn blob(
         .rows_affected();
     if consumed != 1 {
         return Err(AppError::Unauthorized);
+    }
+    // 真正下载成功才消费一次链接使用次数；条件不满足则 410。
+    let used = sqlx::query(
+        "UPDATE share_links SET used_count = used_count + 1
+         WHERE id = ?
+           AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > ?)
+           AND (max_uses IS NULL OR used_count < max_uses)",
+    )
+    .bind(&link.id)
+    .bind(now())
+    .execute(state.shared.pool())
+    .await?
+    .rows_affected();
+    if used != 1 {
+        return Err(AppError::Gone);
     }
 
     let name = if link.title.is_empty() {

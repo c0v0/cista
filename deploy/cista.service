@@ -10,6 +10,7 @@ User=cista
 Group=cista
 EnvironmentFile=/etc/cista/cista.env
 Environment=CISTA_TRUST_PROXY=1
+WorkingDirectory=/srv/cista
 ExecStart=/usr/local/bin/cista-server
 Restart=on-failure
 RestartSec=2

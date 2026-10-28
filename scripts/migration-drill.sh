@@ -46,6 +46,7 @@ fi
 start_server() {
   local data=$1
   CISTA_DATA_DIR="$data" CISTA_BIND="127.0.0.1:$PORT" CISTA_LOG_FORMAT=pretty \
+    CISTA_STATIC_KEY="${CISTA_STATIC_KEY:?需要 CISTA_STATIC_KEY（迁移演练必须用真实密钥启动）}" \
     "$SERVER_BIN" >"$data/server.log" 2>&1 &
   local pid=$!
   for _ in $(seq 1 40); do

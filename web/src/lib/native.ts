@@ -25,6 +25,26 @@ function isSensitiveKey(key: string): boolean {
   return key === "master-key" || key.startsWith("device-seed:");
 }
 
+let platformOs: Promise<string | null> | null = null;
+
+function readOs(raw: unknown): string | null {
+  if (raw && typeof raw === "object" && "os" in raw) {
+    const os = raw.os;
+    return typeof os === "string" ? os : null;
+  }
+  return null;
+}
+
+/** 桌面端用宿主 keyring；Android 用插件。结果缓存一次。 */
+function currentOs(invoke: Invoke): Promise<string | null> {
+  if (!platformOs) {
+    platformOs = invoke("platform_info")
+      .then(readOs)
+      .catch(() => null);
+  }
+  return platformOs;
+}
+
 async function invokeSecret(
   invoke: Invoke,
   command: string,
@@ -34,8 +54,13 @@ async function invokeSecret(
   try {
     return await invoke(`plugin:${PLUGIN}|${command}`, args);
   } catch (error) {
-    // 敏感键绝不回退到宿主命令（Android 的宿主实现只是非敏感键兜底）。
-    if (isSensitiveKey(key)) throw error;
+    // 删除永远允许：清理旧密钥不能被 fail-closed 挡住。
+    if (!isSensitiveKey(key) || command === "secret_delete") {
+      return await invoke(command, args);
+    }
+    // Android 的宿主实现只是明文兜底：敏感键必须失败。
+    if ((await currentOs(invoke)) === "android") throw error;
+    // 桌面端插件未注册命令，宿主 keyring 才是正确路径。
     return await invoke(command, args);
   }
 }
@@ -43,10 +68,22 @@ async function invokeSecret(
 function readValue(raw: unknown): string | null {
   if (typeof raw === "string") return raw;
   if (raw && typeof raw === "object" && "value" in raw) {
-    const value = (raw as Record<string, unknown>).value;
+    const value = raw.value;
     return typeof value === "string" ? value : null;
   }
   return null;
+}
+
+/** Android 升级后清理旧版本写入明文 JSON 的敏感条目；其他平台 no-op。 */
+export async function purgeLegacySecrets(): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  if ((await currentOs(invoke)) !== "android") return;
+  try {
+    await invoke("purge_legacy_secrets");
+  } catch {
+    // 旧版本没有该命令时忽略。
+  }
 }
 
 export function desktopSecretStore(): SecretStore | null {

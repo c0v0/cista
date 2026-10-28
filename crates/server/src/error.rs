@@ -22,6 +22,8 @@ pub enum AppError {
     /// 410：链接过期/撤销/次数用尽；工作区进入过渡区后公网不可达。
     Gone,
     PayloadTooLarge,
+    /// 408：请求体在限定时间内没有读完（慢速攻击）。
+    RequestTimeout,
     /// 配额超限（实例/工作区/链接）。
     Quota(&'static str),
     /// 507：磁盘可用空间低于水位，拒绝写入。
@@ -62,6 +64,11 @@ impl IntoResponse for AppError {
             Self::PayloadTooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 Json(ApiError::new("payload_too_large")),
+            )
+                .into_response(),
+            Self::RequestTimeout => (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(ApiError::new("request_timeout")),
             )
                 .into_response(),
             Self::Quota(scope) => (

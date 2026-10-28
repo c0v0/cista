@@ -33,7 +33,7 @@ files: off | ro | rw | rwm | drop
 - 链接 URL：`https://<frontend>/#/s/<token>`（单文件）、`/#/w/<token>`（工作区）；token 在 fragment。
 - API 鉴权：`Authorization: Share <token>`；口令走单独 header `X-Share-Passphrase`（`drop` 默认必需）。
 - 两步下载：`GET /public/files/{token}/meta`（落地页，不计数）→ `POST /public/files/{token}/confirm`
-  （原子消费 `used_count += 1`，返回 30–60s 票据）→ `GET /public/files/{token}/blob?ticket=...`（流式）。
+  （签发一次性 30–60s 票据；次数在下载成功时原子消费）→ `GET /public/files/{token}/blob?ticket=...`（流式）。
 - 时限关系：`link.expires_at <= workspace.expires_at`。
 - 状态：`active | expired | revoked | exhausted`；过期/撤销/用尽 → **410**（`410 Gone`）。
 - 单文件链接过期只删共享副本（refcount 减），私有原件不动。

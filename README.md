@@ -55,9 +55,21 @@ Web 端默认同源、也可改成跨域地址：
 
 ## 部署与运维
 
+- systemd 安装（按顺序执行，目录/环境文件缺失会导致 unit 直接启动失败）：
+  ```bash
+  sudo useradd --system --home /srv/cista --shell /usr/sbin/nologin cista
+  sudo install -d -o cista -g cista /srv/cista/data /srv/cista/backup
+  sudo install -d /srv/cista/scripts && sudo cp scripts/*.sh /srv/cista/scripts/
+  sudo install -m 600 -o cista -g cista deploy/cista.env.example /etc/cista/cista.env
+  sudo install -m 600 -o cista -g cista deploy/backup.env.example /etc/cista/backup.env
+  # 编辑两个 env：填 CISTA_STATIC_KEY / BOOTSTRAP / RESTIC_*
+  sudo cp deploy/cista.service deploy/cista-gc.service deploy/cista-gc.timer \
+          deploy/cista-backup.service deploy/cista-backup.timer /etc/systemd/system/
+  sudo systemctl daemon-reload && sudo systemctl enable --now cista cista-gc.timer cista-backup.timer
+  ```
 - 默认形态：单二进制 + systemd（`deploy/cista.service`）。Docker 也支持：
-  `cp .env.example .env` → `sudo install -d -o 10001 -g 10001 ./data` → `docker compose up -d --build`
-  （镜像见 `Dockerfile`，容器以 uid 10001 运行，数据挂载到 `./data`）。
+  `cp .env.example .env` → `docker compose up -d --build`
+  （镜像见 `Dockerfile`，容器以 uid 10001 运行；compose 的 `init-data` 会先把 `./data` 属主改成 10001）。
 - 反代：`deploy/Caddyfile`（TLS/HSTS、110MB 请求体上限、WS 不缓冲、JSON 日志）。
 - 备份：`scripts/backup.sh`（`VACUUM INTO` 两份库 + blob 清单 + restic），
   由 `deploy/cista-backup.{service,timer}` 每日触发；失败进 journal。
@@ -78,8 +90,8 @@ Web 端默认同源、也可改成跨域地址：
   gpg --verify Cista_0.1.0_debian13_amd64.deb.asc Cista_0.1.0_debian13_amd64.deb
   ```
   密钥指纹见 `cista-release-public.asc`；签名由 CI 在发布 job 内用仓库 secret 完成。
-- 共享 blob 静态加密：生产必须设置 `CISTA_STATIC_KEY`（32 字节 hex，与其它钥匙分开托管）；
-  未设置时共享文件明文落盘，仅适合开发/测试（见 ADR 0009）。
+- 共享 blob 静态加密：必须设置 `CISTA_STATIC_KEY`（32 字节 hex，与其它钥匙分开托管）；
+  未设置时服务端拒绝启动，仅本地开发可用 `CISTA_ALLOW_PLAINTEXT=1` 关闭（见 ADR 0009）。
 - 升级 / 回滚：
   - 升级：停服务 → 备份 → 换二进制（`systemctl stop cista` → 替换 `/usr/local/bin/cista-server`
     → `systemctl start cista`），迁移在启动时前向执行。
@@ -124,8 +136,9 @@ deploy/         systemd unit/timer、Caddyfile（静态站点 + API 反代）
 ## 公网部署安全基线（审计后新增）
 
 - **必填 `CISTA_STATIC_KEY`**：未设置时服务端拒绝启动；仅本地开发可显式设 `CISTA_ALLOW_PLAINTEXT=1`。
-- **反代后必须设 `CISTA_TRUST_PROXY=1`**（systemd unit 已内置）：只对来自回环地址的请求采信
-  `X-Forwarded-For`，否则所有客户端会共用一个限速桶。
+- **反代后必须设 `CISTA_TRUST_PROXY=1`**：`deploy/cista.env.example` 已包含；unit 里的
+  `Environment=` 只是兜底（systemd 中 `EnvironmentFile` 会覆盖它）。只对来自回环/私有网段的
+  请求采信 `X-Forwarded-For` 的末段，否则所有客户端会共用一个限速桶。
 - **Caddy 访问日志已剔除凭据头**（`Authorization`/`Cookie`/`X-Share-Token`/`X-Share-Passphrase`）；
   部署后可用 `grep -c '"Authorization"' /var/log/caddy/cista.log` 应得到 0。
 - **GC 定时器**：`deploy/cista-gc.{service,timer}` 每小时清理过期链接/票据、把到期工作区转入隔离区，

@@ -202,14 +202,14 @@ jobs:
           pnpm -C web build
       - name: Init Android project
         working-directory: apps/desktop/src-tauri
-        run: pnpm dlx @tauri-apps/cli@2 android init --ci
+        run: pnpm dlx @tauri-apps/cli@2.12.4 android init --ci
       - name: Build APK
         working-directory: apps/desktop/src-tauri
         run: |
           export NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.3.11579264"
-          pnpm dlx @tauri-apps/cli@2 android build --apk --ci --config '{"build":{"beforeBuildCommand":""}}'
+          pnpm dlx @tauri-apps/cli@2.12.4 android build --apk --ci --config '{"build":{"beforeBuildCommand":""}}'
       - name: Sign APK with apksigner (optional)
-        if: ${{ hashFiles('**/*.apk') != '' }}
+        if: ${{ github.event_name != 'pull_request' && hashFiles('**/*.apk') != '' }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -221,11 +221,11 @@ jobs:
             exit 0
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/cista-release.jks"
-          KS_PASSWORD="${KS_PASSWORD//$\r/}"
-          KS_PASSWORD="${KS_PASSWORD//$\n/}"
+          KS_PASSWORD="${KS_PASSWORD//$'\r'/}"
+          KS_PASSWORD="${KS_PASSWORD//$'\n'/}"
           KEY_PASSWORD="$KS_PASSWORD"
-          KEY_PASSWORD="${KEY_PASSWORD//$\r/}"
-          KEY_PASSWORD="${KEY_PASSWORD//$\n/}"
+          KEY_PASSWORD="${KEY_PASSWORD//$'\r'/}"
+          KEY_PASSWORD="${KEY_PASSWORD//$'\n'/}"
           BT="$ANDROID_HOME/build-tools/36.0.0"
           ALIAS=$("$JAVA_HOME/bin/keytool" -list -keystore "$RUNNER_TEMP/cista-release.jks" \
             -storepass:env KS_PASSWORD 2>/dev/null | awk -F, '/PrivateKeyEntry/{print $1; exit}')

@@ -2,8 +2,7 @@
 #
 # 职责：TLS/HSTS、请求体上限、静态 SPA、API/WS 反代、访问日志。
 # 分享 token 只在 `Authorization: Share` 头里，因此 URI 不含长期凭据；
-# 单文件下载票据（45s、单对象）在 query 里——若你长期保存访问日志，
-# 需要在日志管道里对 query 脱敏或关闭 URI 记录（本文件不使用未经核实的过滤指令）。
+# 单文件下载票据（45s、单次使用）在 query 里；访问日志已用 format filter 删除凭据头。
 #
 # 部署：把 example.com 换成真实域名；把 /var/www/cista 换成 `web/dist` 的路径；
 # 后端默认 127.0.0.1:8787（CISTA_BIND）。这样同一个域名同时提供 SPA 与 API，
@@ -31,6 +30,13 @@ example.com {
 				read_timeout 300s
 				write_timeout 300s
 			}
+		}
+	}
+	# SSE 需要立即 flush；放在 /public/* 之前，Caddy 的 handle 互斥。
+	handle /public/workspaces/events {
+		header Content-Security-Policy "default-src 'none'; sandbox"
+		reverse_proxy 127.0.0.1:8787 {
+			flush_interval -1
 		}
 	}
 	handle /public/* {

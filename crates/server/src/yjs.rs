@@ -170,19 +170,21 @@ pub async fn apply_client_update(
         return Err(AppError::PayloadTooLarge);
     }
 
-    // 先落库（ADR 0006）：任何被接受的 update 都能从尾部重放。
+    // 先应用（yrs 对重复 update 幂等），成功后再落库：
+    // 若先落库而 apply 失败，坏行会永久毒化该工作区的后续加载。
+    {
+        let mut txn = doc.doc.transact_mut();
+        txn.apply_update(update)
+            .map_err(|_| AppError::BadRequest("invalid_update"))?;
+    }
+
+    // 落库失败时内存已应用该 update；客户端重试会幂等地再次应用并落库。
     sqlx::query("INSERT INTO doc_updates (workspace_id, \"update\", created_at) VALUES (?, ?, ?)")
         .bind(&doc.workspace_id)
         .bind(bytes)
         .bind(now())
         .execute(state.shared.pool())
         .await?;
-
-    {
-        let mut txn = doc.doc.transact_mut();
-        txn.apply_update(update)
-            .map_err(|_| AppError::BadRequest("invalid_update"))?;
-    }
 
     let should_snapshot = {
         let mut counter = doc

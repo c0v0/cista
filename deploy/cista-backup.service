@@ -9,6 +9,8 @@ Type=oneshot
 User=cista
 Group=cista
 EnvironmentFile=/etc/cista/backup.env
+# WAL 活库需要可写 -shm 才能被 sqlite3 读取；备份进程与服务同用户，权限面不变。
+ExecStartPre=/usr/local/bin/cista-server gc
 ExecStart=/srv/cista/scripts/backup.sh
 # 失败写 journal（stderr）并以非零退出，systemd 记录 failed unit
 StandardError=journal
@@ -27,4 +29,4 @@ PrivateDevices=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-ReadWritePaths=/srv/cista/backup
+ReadWritePaths=/srv/cista/backup /srv/cista/data

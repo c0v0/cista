@@ -5,10 +5,22 @@
 #
 # 数据在 ./data（private.db / shared.db / blobs），备份见 scripts/backup.sh。
 services:
+  # bind mount 若不存在会由 Docker 以 root 创建；这里先修正属主，避免容器 uid 10001 无写权限。
+  init-data:
+    image: debian:13-slim
+    user: "0:0"
+    command: ["chown", "-R", "10001:10001", "/data"]
+    volumes:
+      - ./data:/data
+    restart: "no"
+
   cista:
     build: .
     image: cista-server:local
     restart: unless-stopped
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:

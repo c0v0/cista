@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { resolveApiBase } from "./lib/apiBase";
-import { desktopSecretStore, tauriInvoke } from "./lib/native";
+import { desktopSecretStore, purgeLegacySecrets, tauriInvoke } from "./lib/native";
 import type { Session } from "./lib/notesApi";
 import {
   forgetMasterKey,
@@ -61,6 +61,8 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
+        // Android 旧版本可能把敏感键写进明文 JSON：启动时先清理。
+        await purgeLegacySecrets();
         const device = await restoreDevice(store);
         const mk = await restoreMasterKey(store);
         if (!cancelled && device && mk) setSession({ apiBase, device, mk });
@@ -76,7 +78,7 @@ export function App() {
   const lock = () => {
     setSession(null);
     const store = desktopSecretStore();
-    if (store) void forgetMasterKey(store);
+    if (store) void forgetMasterKey(store).catch(() => {});
   };
 
   const saveServer = (base: string) => {
@@ -87,8 +89,18 @@ export function App() {
     setSession(null);
     const store = desktopSecretStore();
     if (store) {
-      void forgetMasterKey(store);
-      void forgetRememberedDevice(store);
+      void (async () => {
+        try {
+          await forgetMasterKey(store);
+        } catch {
+          // 旧版本/钥匙串异常不应阻止更换服务器。
+        }
+        try {
+          await forgetRememberedDevice(store);
+        } catch {
+          // 同上。
+        }
+      })();
     }
     window.location.hash = wantsSetup || needsSetup ? "#/app" : hash;
   };

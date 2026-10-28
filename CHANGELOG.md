@@ -83,3 +83,16 @@
 - 实例配额按物理副本释放：删除/归档只释放工作区配额，避免与链接回收重复扣减。
 - IP 限速按路径首段分桶（`/api`、`/public`、`/ws`），单一路由洪泛不再挤占其他面。
 - GitHub Actions 全部固定到 commit SHA（附版本注释），dependabot 继续跟踪。
+
+### 第二轮审计修复
+- 认证前 body 预算加 15s 超时（慢速 16 连接不再饿死 `/api`）。
+- Yjs 改为「先 apply 再落库」，坏 update 不会毒化工作区；票据改为下载成功时消费次数（confirm 只签票）。
+- 客户端 IP 解析统一：仅可信反代对端（回环/私有/链路本地）采信 `X-Forwarded-For` 末段；
+  enroll 退避与签名退避共用同一口径。
+- 流式下载区分干净 EOF 与帧头截断；私有上传临时文件名随机化。
+- Tauri CSP 真正放开 `https:`/`wss:`；桌面端敏感键回退到宿主 keyring，Android 仍 fail-closed；
+  Android 启动时清理旧版明文密钥；删除操作不受 fail-closed 限制。
+- SSE 端点校验口令并由 Caddy 立即 flush。
+- 部署：systemd 加 `WorkingDirectory`、备份 unit 可读写数据目录并在快照前先 gc、
+  `deploy/{cista,backup}.env.example`、Docker `init-data` 修正 `./data` 属主、Caddy >=2.7 说明。
+- CI：修复 CR 剥离语法、PR 不执行签名、Tauri CLI 固定 2.12.4。

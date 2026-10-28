@@ -8,6 +8,7 @@ Type=oneshot
 User=cista
 Group=cista
 EnvironmentFile=/etc/cista/cista.env
+WorkingDirectory=/srv/cista
 ExecStart=/usr/local/bin/cista-server gc
 UMask=0077
 ProtectSystem=strict

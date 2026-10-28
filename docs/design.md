@@ -116,7 +116,7 @@
 - token：128-bit 随机，客户端生成；服务端只存 `SHA-256(token)`。
 - 链接：`https://<frontend>/#/s/<token>`、`/#/w/<token>`；token 在 fragment，不进前端的日志/Referer。
 - SPA 调 API 时放 header（`Authorization: Share <token>` 或 `X-Share-Token`），不放 query。
-- 两步：`GET` 落地页不计数 → 确认后原子消费 → 返回 30–60 秒下载票据；断点重试在窗口内。
+- 两步：`GET` 落地页不计数 → `confirm` 只校验并签发一次性票据（不消费次数）→ 凭票据下载成功时原子消费次数；中断后重新 confirm 换新票据。
 - 过期/撤销/次数用尽 → 410。
 - 时限关系：`link.expires_at <= workspace.expires_at`；单个链接过期只让该链接 410，workspace 过期才进入过渡区。
 
@@ -342,7 +342,7 @@ POST   /api/workspaces/{id}/restore
 
 # 公网分享
 GET    /public/files/{token}/meta
-POST   /public/files/{token}/confirm  原子消费，返回票据
+POST   /public/files/{token}/confirm  签发一次性票据（不消费次数）
 GET    /public/files/{token}/blob     凭票据流式下载
 GET    /public/workspaces/{token}/meta
 GET    /public/workspaces/{token}/files

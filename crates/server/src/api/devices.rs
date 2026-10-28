@@ -19,6 +19,7 @@ use crate::state::{now, AppState};
 /// `POST /api/devices/enroll`
 pub async fn enroll(
     State(state): State<AppState>,
+    connect: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     method: Method,
     uri: Uri,
@@ -40,7 +41,11 @@ pub async fn enroll(
 
     let mut bootstrap = false;
     let now_ts = now();
-    let failure_key = enroll_failure_key(&state, &headers);
+    let failure_key = enroll_failure_key(
+        &state,
+        connect.as_ref().map(|Extension(info)| info.0.ip()),
+        &headers,
+    );
     if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
         return Err(AppError::RateLimited { retry_after_secs });
     }
@@ -153,19 +158,13 @@ fn decode_pubkey(raw: &str) -> Result<[u8; 32], AppError> {
         .map_err(|_| AppError::BadRequest("invalid_pubkey"))
 }
 
-/// 入网失败退避的 key：反代部署用客户端地址，直连时共用一个桶。
-fn enroll_failure_key(state: &AppState, headers: &HeaderMap) -> String {
-    let client = if state.cfg.trust_proxy {
-        headers
-            .get("x-forwarded-for")
-            .and_then(|value| value.to_str().ok())
-            // 取最后一个条目（反代追加的真实客户端地址），避免客户端伪造首个条目。
-            .and_then(|raw| raw.rsplit(',').next())
-            .map(str::trim)
-            .filter(|candidate| candidate.parse::<std::net::IpAddr>().is_ok())
-            .unwrap_or("unknown")
-    } else {
-        "direct"
-    };
+/// 入网失败退避的 key：使用与全局限速相同的客户端地址解析。
+fn enroll_failure_key(
+    state: &AppState,
+    peer: Option<std::net::IpAddr>,
+    headers: &HeaderMap,
+) -> String {
+    let client = crate::auth::client_ip(peer, headers, state.cfg.trust_proxy)
+        .unwrap_or_else(|| "unknown".to_string());
     format!("enroll:{client}")
 }

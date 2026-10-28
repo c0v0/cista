@@ -47,12 +47,18 @@ pub async fn upload(
         // 同内容已存在：不重复写盘、也不重复记账。
         tracing::debug!(hash = %hash, "blob already present");
     } else {
-        let tmp = dir.join(format!(".{hash}.tmp"));
+        let tmp = dir.join(format!(".{hash}.{}.tmp", crate::ids::new_id("tmp")));
         let mut file = tokio::fs::File::create(&tmp).await?;
-        file.write_all(&body).await?;
+        if let Err(error) = file.write_all(&body).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(error.into());
+        }
         file.flush().await?;
         drop(file);
-        tokio::fs::rename(&tmp, &path).await?;
+        if let Err(error) = tokio::fs::rename(&tmp, &path).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(error.into());
+        }
     }
 
     // 与共享面共用同一份实例配额计数（shared.usage_counters.instance.total）；

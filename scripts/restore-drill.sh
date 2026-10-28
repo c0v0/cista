@@ -88,6 +88,7 @@ done
 # 起服务探活（恢复出来的库必须能被迁移与启动流程接受）
 [ -x "$SERVER_BIN" ] || fail "找不到服务端二进制：$SERVER_BIN"
 CISTA_DATA_DIR="$DRILL_DATA" CISTA_BIND="127.0.0.1:$PORT" CISTA_LOG_FORMAT=pretty \
+  CISTA_STATIC_KEY="${CISTA_STATIC_KEY:?需要 CISTA_STATIC_KEY（恢复演练必须用真实密钥启动）}" \
   "$SERVER_BIN" >"$WORK/server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT

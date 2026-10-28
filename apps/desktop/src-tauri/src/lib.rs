@@ -181,12 +181,25 @@ fn purge_sensitive(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn purge_legacy_secrets(app: tauri::AppHandle) -> Result<(), String> {
+    purge_sensitive(&app)
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn purge_legacy_secrets() -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_cista_keystore::init())
         .invoke_handler(tauri::generate_handler![
             platform_info,
+            purge_legacy_secrets,
             secret_save,
             secret_load,
             secret_delete

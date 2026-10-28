@@ -9,11 +9,44 @@ use axum::http::{HeaderMap, Method, Uri};
 use axum::middleware::Next;
 use axum::response::Response;
 use cista_core::auth::{self, RequestMeta};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
 use subtle::ConstantTimeEq;
 
 use crate::error::AppError;
 use crate::state::{now, AppState};
+
+/// 读取请求体的最长时间；超过就 408，避免慢速连接长期占用并发预算。
+const BODY_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 可信反代对端：回环、私有网段、链路本地（Docker 网桥、Caddy 同机）。
+fn is_trusted_proxy(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// 客户端地址：仅在可信反代对端时采信 `X-Forwarded-For` 的**最后一段**
+/// （反代追加的真实客户端；首段可被客户端伪造）。
+pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, trust_proxy: bool) -> Option<String> {
+    if trust_proxy && peer.map(is_trusted_proxy).unwrap_or(false) {
+        if let Some(last) = headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|raw| raw.rsplit(',').next())
+            .map(str::trim)
+            .filter(|candidate| candidate.parse::<IpAddr>().is_ok())
+        {
+            return Some(last.to_string());
+        }
+    }
+    peer.map(|ip| ip.to_string())
+}
 
 pub const H_DEVICE: &str = "x-device-id";
 pub const H_NONCE: &str = "x-nonce";
@@ -144,11 +177,16 @@ pub async fn require_signed(
     })?
     .map_err(|_| AppError::Internal(anyhow::anyhow!("body budget closed")))?;
 
-    let bytes = match to_bytes(body, limit).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
+    let bytes = match tokio::time::timeout(BODY_READ_TIMEOUT, to_bytes(body, limit)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => {
             drop(permit);
             return Err(AppError::PayloadTooLarge);
+        }
+        Err(_) => {
+            // 慢速请求体：释放 permit 并超时，避免 16 个连接饿死所有 /api 请求。
+            drop(permit);
+            return Err(AppError::RequestTimeout);
         }
     };
 
@@ -157,9 +195,10 @@ pub async fn require_signed(
     let peer = parts
         .extensions
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|info| info.0.ip().to_string())
+        .map(|info| info.0.ip());
+    let client = client_ip(peer, &parts.headers, state.cfg.trust_proxy)
         .unwrap_or_else(|| "unknown".to_string());
-    let failure_key = failure_key(&peer, &parts.headers);
+    let failure_key = failure_key(&client, &parts.headers);
     if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
         return Err(AppError::RateLimited { retry_after_secs });
     }

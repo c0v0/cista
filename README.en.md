@@ -87,8 +87,8 @@ For same-origin deployments, Caddy should serve `web/dist` and proxy the API —
   # verify a single .deb detached signature
   gpg --verify Cista_0.1.0_debian13_amd64.deb.asc Cista_0.1.0_debian13_amd64.deb
   ```
-- Shared blobs at rest: set `CISTA_STATIC_KEY` (32 bytes hex) in production, stored separately from the
-  other keys; without it shared blobs are written in plaintext and the setup is dev/test only (ADR 0009).
+- Shared blobs at rest: `CISTA_STATIC_KEY` (32 bytes hex) is required and must be stored separately from
+  the other keys; without it the server refuses to start (local development only: `CISTA_ALLOW_PLAINTEXT=1`, ADR 0009).
 - Upgrade / rollback:
   - Upgrade: stop service → back up → replace the binary (`systemctl stop cista` → install
     `/usr/local/bin/cista-server` → `systemctl start cista`); migrations run forward at startup.

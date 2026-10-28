@@ -16,7 +16,7 @@ pnpm -C web install --frozen-lockfile
 pnpm -C web build
 
 cd apps/desktop/src-tauri
-pnpm dlx @tauri-apps/cli@2 build --bundles "$BUNDLES" \
+pnpm dlx @tauri-apps/cli@2.12.4 build --bundles "$BUNDLES" \
   --config '{"build":{"beforeBuildCommand":""}}'
 
 TARGET_ROOT=${CARGO_TARGET_DIR:-$REPO_ROOT/target}

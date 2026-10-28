@@ -125,21 +125,7 @@ async fn ip_limit(
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0.ip());
-    // 反代部署：只有来自回环地址的请求才采信 X-Forwarded-For（Caddy 直连 127.0.0.1）。
-    let client = if state.cfg.trust_proxy && peer_ip.map(|ip| ip.is_loopback()).unwrap_or(false) {
-        request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|value| value.to_str().ok())
-            // 取最后一个条目：反代把真实客户端地址追加在末尾；首个条目可被客户端伪造。
-            .and_then(|raw| raw.rsplit(',').next())
-            .map(str::trim)
-            .filter(|candidate| candidate.parse::<std::net::IpAddr>().is_ok())
-            .map(str::to_string)
-            .or_else(|| peer_ip.map(|ip| ip.to_string()))
-    } else {
-        peer_ip.map(|ip| ip.to_string())
-    };
+    let client = crate::auth::client_ip(peer_ip, request.headers(), state.cfg.trust_proxy);
     // 按路径首段分桶：/api 的洪泛不应挤占 /public 或 /ws 的额度。
     let route = request
         .uri()
