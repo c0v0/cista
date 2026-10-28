@@ -189,18 +189,44 @@ pub async fn load_link_for_ticket(
 }
 
 /// 有口令的链接：需要 `X-Share-Passphrase` 头。
-pub fn require_passphrase(link: &Link, headers: &HeaderMap) -> Result<(), AppError> {
-    let Some(required_hash) = link.passphrase_hash.as_deref() else {
-        return Ok(());
-    };
+pub async fn require_passphrase(
+    state: &AppState,
+    link: &Link,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
     let provided = headers
         .get("x-share-passphrase")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+        .map(str::to_owned);
+    require_passphrase_value(state, link, provided.as_deref()).await
+}
+
+/// 供 WS 握手持有的口令字符串复用；Argon2 在 blocking 线程池执行并限制并发。
+pub async fn require_passphrase_value(
+    state: &AppState,
+    link: &Link,
+    provided: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(required_hash) = link.passphrase_hash.as_deref() else {
+        return Ok(());
+    };
+    let provided = provided.unwrap_or("");
     if provided.is_empty() {
         return Err(AppError::Unauthorized);
     }
-    if verify_passphrase(required_hash, provided) {
+    let hash = required_hash.to_string();
+    let provided = provided.to_string();
+    let permit = state
+        .hash_budget
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("hash budget closed")))?;
+    let verified = tokio::task::spawn_blocking(move || verify_passphrase(&hash, &provided))
+        .await
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("password hashing task failed")))?;
+    drop(permit);
+    if verified {
         Ok(())
     } else {
         Err(AppError::Unauthorized)
@@ -249,15 +275,79 @@ pub async fn serve_blob(
     name: &str,
 ) -> Result<Response, AppError> {
     let path = state.shared.blob_path(blob_hash);
-    let stored = tokio::fs::read(&path)
+    let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
-    let bytes = match &state.cfg.static_key {
-        Some(key) => crate::blob_crypto::open_blob(key, &stored)?,
-        None => stored,
-    };
     let headers = download_headers(name, "application/octet-stream");
-    Ok((StatusCode::OK, headers, bytes).into_response())
+    let body = blob_body(file, state.cfg.static_key).await?;
+    Ok((StatusCode::OK, headers, body).into_response())
+}
+
+/// 流式下载：每次只解密/转发一个 ≤1 MiB 的块，内存占用与文件大小无关。
+async fn blob_body(
+    file: tokio::fs::File,
+    key: Option<[u8; 32]>,
+) -> Result<axum::body::Body, AppError> {
+    use cista_core::crypto::NONCE_LEN;
+    use futures_util::stream::unfold;
+    use tokio::io::{AsyncReadExt, BufReader};
+
+    const PLAIN_CHUNK: usize = 256 * 1024;
+    let mut reader = BufReader::new(file);
+    if key.is_some() {
+        let mut magic = [0u8; 4];
+        if reader.read_exact(&mut magic).await.is_err() || &magic != crate::blob_crypto::MAGIC {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "shared blob is not encrypted (wrong CISTA_STATIC_KEY?)"
+            )));
+        }
+    }
+    let stream = unfold((reader, key, 0u32), |(mut reader, key, index)| async move {
+        if key.is_none() {
+            // 无静态密钥（仅测试）：直接按块转发。
+            let mut buf = vec![0u8; PLAIN_CHUNK];
+            return match reader.read(&mut buf).await {
+                Ok(0) | Err(_) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some((Ok(buf), (reader, key, index)))
+                }
+            };
+        }
+        let key = key.expect("checked above");
+        let mut head = [0u8; NONCE_LEN + 4];
+        if reader.read_exact(&mut head).await.is_err() {
+            return None;
+        }
+        let nonce = head[..NONCE_LEN].to_vec();
+        let ct_len = u32::from_be_bytes(
+            head[NONCE_LEN..NONCE_LEN + 4]
+                .try_into()
+                .unwrap_or_default(),
+        );
+        let ct_len = usize::try_from(ct_len).unwrap_or(usize::MAX);
+        if ct_len > crate::blob_crypto::CHUNK + 16 + crate::blob_crypto::CHUNK {
+            return Some((
+                Err(std::io::Error::other("blob chunk too large")),
+                (reader, Some(key), index),
+            ));
+        }
+        let mut ciphertext = vec![0u8; ct_len];
+        if reader.read_exact(&mut ciphertext).await.is_err() {
+            return Some((
+                Err(std::io::Error::other("blob frame truncated")),
+                (reader, Some(key), index),
+            ));
+        }
+        match crate::blob_crypto::open_frame(&key, index, &nonce, &ciphertext) {
+            Ok(plaintext) => Some((Ok(plaintext), (reader, Some(key), index + 1))),
+            Err(_) => Some((
+                Err(std::io::Error::other("blob decrypt failed")),
+                (reader, Some(key), index),
+            )),
+        }
+    });
+    Ok(axum::body::Body::from_stream(stream))
 }
 
 /// 共享库里的工作区行（公网只需要状态与标题）。
@@ -286,11 +376,16 @@ pub async fn load_workspace(
 
 /// 公网只允许 `active`；其余状态按不可达处理以免泄漏过渡区。
 pub fn ensure_public(workspace: &WorkspaceRow) -> Result<(), AppError> {
-    if workspace.state == "active" {
-        Ok(())
-    } else {
-        Err(AppError::Gone)
+    if workspace.state != "active" {
+        return Err(AppError::Gone);
     }
+    // 到期时间不依赖 gc：即使 timer 没跑，公网访问也立即 410。
+    if let Some(expires_at) = workspace.expires_at {
+        if expires_at <= crate::state::now() {
+            return Err(AppError::Gone);
+        }
+    }
+    Ok(())
 }
 
 /// 共享库里维护 blob 文件本体：不存在才写，内容寻址。
@@ -305,9 +400,13 @@ pub async fn store_shared_blob(state: &AppState, hash: &str, bytes: &[u8]) -> Re
         Some(key) => crate::blob_crypto::seal_blob(key, bytes)?,
         None => bytes.to_vec(),
     };
-    let tmp = path.with_extension("tmp");
+    // 固定 `.tmp` 会让并发写同一 hash 互相踩踏；用随机后缀。
+    let tmp = path.with_extension(format!("{}.tmp", crate::ids::new_id("tmp")));
     write_tmp(&tmp, &payload).await?;
-    tokio::fs::rename(&tmp, &path).await?;
+    if let Err(error) = tokio::fs::rename(&tmp, &path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(error.into());
+    }
     Ok(())
 }
 

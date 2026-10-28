@@ -54,6 +54,26 @@ fn write_frame(out: &mut Vec<u8>, sealed: &Sealed) {
     out.extend_from_slice(&sealed.ct);
 }
 
+/// 解密单帧（流式下载用：调用方自己按 nonce(24)‖len(u32be)‖ct 分帧）。
+pub fn open_frame(
+    key: &[u8; 32],
+    index: u32,
+    nonce: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, AppError> {
+    if nonce.len() != NONCE_LEN || ciphertext.len() > MAX_CT {
+        return Err(AppError::Internal(anyhow::anyhow!("bad blob frame")));
+    }
+    let key = Key::from_bytes(*key);
+    let sealed = Sealed {
+        nonce: nonce.to_vec(),
+        ct: ciphertext.to_vec(),
+    };
+    let plaintext = open(&key, &chunk_aad(index), &sealed)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("shared blob decrypt failed")))?;
+    Ok(plaintext.to_vec())
+}
+
 /// 解密整段分块密文。
 pub fn open_blob(key: &[u8; 32], stored: &[u8]) -> Result<Vec<u8>, AppError> {
     if !stored.starts_with(MAGIC) {

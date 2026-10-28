@@ -70,4 +70,8 @@ impl SharedStore {
     pub fn blob_path(&self, hash: &str) -> PathBuf {
         self.blobs_dir.join(hash)
     }
+
+    pub fn blobs_dir(&self) -> &Path {
+        self.blobs_dir.as_path()
+    }
 }

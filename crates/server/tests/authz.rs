@@ -198,3 +198,28 @@ async fn tampered_body_is_401() {
     let (status, _) = app.send(request).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn bootstrap_token_is_single_use() {
+    let app = TestApp::new().await;
+    let _first = app.enroll("first").await;
+
+    // 第二次仍用 bootstrap：必须 401（token 已消费）。
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).expect("seed");
+    let secret = cista_core::auth::DeviceSecret::from_seed(&seed);
+    let body = serde_json::json!({
+        "name": "second",
+        "pubkey": hex::encode(secret.public_key()),
+    })
+    .to_string();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/devices/enroll")
+        .header("authorization", format!("Bootstrap {}", common::BOOTSTRAP))
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .expect("enroll request");
+    let (status, _) = app.send(request).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

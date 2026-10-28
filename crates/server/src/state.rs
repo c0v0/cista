@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cista_core::auth::ReplayCache;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 
 use crate::config::{Config, Quotas};
 use crate::db::{PrivateStore, SharedStore};
@@ -27,6 +27,10 @@ pub struct AppState {
     pub rate: Arc<RateLimiter>,
     pub drop_rate: Arc<RateLimiter>,
     pub failures: Arc<FailureTracker>,
+    /// 限制同时被缓冲的已签名请求体数量（每份 ≤ 6 MiB）。
+    pub body_budget: Arc<Semaphore>,
+    /// 限制并发 Argon2 校验，避免同步哈希阻塞 runtime。
+    pub hash_budget: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -51,6 +55,8 @@ impl AppState {
             rate: Arc::new(rate),
             drop_rate: Arc::new(drop_rate),
             failures: Arc::new(FailureTracker::new(5, 300)),
+            body_budget: Arc::new(Semaphore::new(16)),
+            hash_budget: Arc::new(Semaphore::new(4)),
         }
     }
 
@@ -95,31 +101,34 @@ impl EventBus {
 }
 
 /// Yjs 帧广播（`/ws`）：每个工作区一个通道，载荷是完整的 y-sync 编码帧。
+///
+/// 载荷用 `Arc<[u8]>` 共享，避免为每个订阅者复制；通道容量压到 32，
+/// 慢客户端会收到 `Lagged` 并跳过帧，而不是无限占用内存。
 #[derive(Debug, Default)]
 pub struct FrameBus {
-    channels: Mutex<HashMap<String, broadcast::Sender<Vec<u8>>>>,
+    channels: Mutex<HashMap<String, broadcast::Sender<Arc<[u8]>>>>,
 }
 
 impl FrameBus {
-    pub fn subscribe(&self, workspace_id: &str) -> broadcast::Receiver<Vec<u8>> {
+    pub fn subscribe(&self, workspace_id: &str) -> broadcast::Receiver<Arc<[u8]>> {
         let mut channels = self
             .channels
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         channels
             .entry(workspace_id.to_string())
-            .or_insert_with(|| broadcast::channel(128).0)
+            .or_insert_with(|| broadcast::channel(32).0)
             .subscribe()
     }
 
-    pub fn publish(&self, workspace_id: &str, frame: Vec<u8>) {
+    pub fn publish(&self, workspace_id: &str, frame: Arc<[u8]>) {
         let mut channels = self
             .channels
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let sender = channels
             .entry(workspace_id.to_string())
-            .or_insert_with(|| broadcast::channel(128).0);
+            .or_insert_with(|| broadcast::channel(32).0);
         let _ = sender.send(frame);
     }
 }
@@ -130,4 +139,30 @@ pub fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
         .unwrap_or(0)
+}
+
+/// 数据目录所在卷的可用字节数；拿不到时为 `None`（Windows 或异常）。
+///
+/// `statvfs` 的字段宽度随平台不同（Linux 为 u64，部分平台为 u32），
+/// 因此这里的 `u64::from` 在 Linux 上会被 clippy 视为同类型转换。
+#[allow(clippy::useless_conversion)]
+#[cfg(unix)]
+pub fn free_bytes(path: &std::path::Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `statvfs` 只写入由我们提供的、对齐正确的结构体。
+    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c_path.as_ptr(), &mut stats) } != 0 {
+        return None;
+    }
+    let block = u64::from(stats.f_frsize)
+        .checked_mul(u64::from(stats.f_bavail))
+        .unwrap_or(0);
+    Some(block)
+}
+
+#[cfg(not(unix))]
+pub fn free_bytes(_path: &std::path::Path) -> Option<u64> {
+    None
 }

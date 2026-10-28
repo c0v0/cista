@@ -24,6 +24,8 @@ pub enum AppError {
     PayloadTooLarge,
     /// 配额超限（实例/工作区/链接）。
     Quota(&'static str),
+    /// 507：磁盘可用空间低于水位，拒绝写入。
+    InsufficientStorage,
     /// 429：令牌桶耗尽，`Retry-After` 给出等待秒数。
     RateLimited {
         retry_after_secs: u64,
@@ -65,6 +67,11 @@ impl IntoResponse for AppError {
             Self::Quota(scope) => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 Json(serde_json::json!({ "error": "quota_exceeded", "scope": scope })),
+            )
+                .into_response(),
+            Self::InsufficientStorage => (
+                StatusCode::INSUFFICIENT_STORAGE,
+                Json(ApiError::new("insufficient_storage")),
             )
                 .into_response(),
             Self::RateLimited { retry_after_secs } => {

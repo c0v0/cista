@@ -42,7 +42,7 @@ pub async fn confirm(
     headers: HeaderMap,
 ) -> Result<Json<ConfirmResponse>, AppError> {
     let link = load_link(&state, &token, ShareKind::File).await?;
-    require_passphrase(&link, &headers)?;
+    require_passphrase(&state, &link, &headers).await?;
 
     let timestamp = now();
     let expires_at = timestamp + TICKET_TTL_SECS;
@@ -74,6 +74,20 @@ pub async fn confirm(
     .bind(&link.object_id)
     .bind(expires_at)
     .bind(timestamp)
+    .execute(state.shared.pool())
+    .await?;
+
+    // 每个链接最多保留 8 张未使用票据：重复 confirm 不会无限增长 DB。
+    sqlx::query(
+        "DELETE FROM blob_tickets
+         WHERE link_id = ?
+           AND ticket_hash NOT IN (
+             SELECT ticket_hash FROM blob_tickets
+             WHERE link_id = ? ORDER BY created_at DESC LIMIT 8
+           )",
+    )
+    .bind(&link.id)
+    .bind(&link.id)
     .execute(state.shared.pool())
     .await?;
 

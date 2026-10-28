@@ -32,12 +32,13 @@ pub async fn enroll(
     let pubkey = decode_pubkey(&request.pubkey)?;
     let device_id = auth::device_id(&pubkey);
 
-    // 认证：bootstrap token（首设备）或已有设备签名（新设备）。
+    // 认证：bootstrap token（仅首台设备）或已有设备签名（新设备）。
     let authorization = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
 
+    let mut bootstrap = false;
     if let Some(token) = authorization.strip_prefix("Bootstrap ") {
         let expected = state
             .cfg
@@ -47,8 +48,24 @@ pub async fn enroll(
         if !crate::auth::token_matches(expected, token.trim()) {
             return Err(AppError::Unauthorized);
         }
+        bootstrap = true;
     } else {
         crate::auth::verify_headers(&state, &headers, &method, &uri, &body).await?;
+    }
+
+    let mut tx = state.private.pool().begin().await?;
+    if bootstrap {
+        // 一次性消费：并发首装也只有一个能抢到这一行。
+        let claimed = sqlx::query(
+            "INSERT INTO meta (key, value) VALUES ('bootstrap_used', '1')
+             ON CONFLICT(key) DO NOTHING",
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if claimed == 0 {
+            return Err(AppError::Unauthorized);
+        }
     }
 
     let inserted = sqlx::query(
@@ -59,13 +76,14 @@ pub async fn enroll(
     .bind(request.name.trim())
     .bind(pubkey.to_vec())
     .bind(now())
-    .execute(state.private.pool())
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
     if inserted == 0 {
         return Err(AppError::AlreadyExists);
     }
+    tx.commit().await?;
 
     tracing::info!(device = %device_id, "device enrolled");
     Ok((StatusCode::CREATED, Json(EnrollResponse { device_id })))

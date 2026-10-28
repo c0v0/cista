@@ -63,7 +63,7 @@ pub async fn files(
     let link = load_link(&state, &token, ShareKind::Workspace).await?;
     let workspace = load_workspace(&state, &link.object_id).await?;
     ensure_public(&workspace)?;
-    require_passphrase(&link, &headers)?;
+    require_passphrase(&state, &link, &headers).await?;
     if !can_read_files(link.file_scopes) {
         // `drop` 链接只上传、不列目录。
         return Err(AppError::Forbidden);
@@ -125,7 +125,7 @@ pub async fn upload(
     if !can_upload(link.file_scopes) {
         return Err(AppError::Forbidden);
     }
-    require_passphrase(&link, &headers)?;
+    require_passphrase(&state, &link, &headers).await?;
     // `drop` 链接只上传、不列目录，额度比普通分享链接更严（见 ADR 0007）。
     if link.file_scopes & FILE_DROP_UPLOAD_ONLY != 0 {
         state
@@ -151,6 +151,13 @@ pub async fn upload(
         return Err(AppError::BadRequest("unsupported_media_type"));
     }
 
+    // 磁盘水位：低于阈值直接拒绝，避免写满卷导致 SQLite 损坏。
+    if let Some(free) = crate::state::free_bytes(&state.cfg.data_dir) {
+        if free < state.cfg.min_free_bytes.max(state.cfg.max_file_bytes) {
+            return Err(AppError::InsufficientStorage);
+        }
+    }
+
     // 流式写入临时文件：内存占用与并发数无关，超限立即 413 并清理。
     let temp_path = state
         .shared
@@ -166,58 +173,84 @@ pub async fn upload(
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(AppError::BadRequest("empty_file"));
     }
-    // 内容寻址：同内容已存在时丢弃临时文件（不重写本体）。
+    // 先预留配额，再让文件进入最终路径：预留失败时磁盘上不会留下不计账的副本。
     let final_path = state.shared.blob_path(&blob_hash);
-    if tokio::fs::try_exists(&final_path).await? {
+    let mut tx = state.shared.pool().begin().await?;
+    if let Err(error) =
+        quota::reserve(&mut tx, &link.object_id, &link.id, size, state.quotas()).await
+    {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(error);
+    }
+    let final_name = match unique_name(&state, &link.object_id, &name).await {
+        Ok(name) => name,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(error);
+        }
+    };
+    let existed = tokio::fs::try_exists(&final_path).await?;
+    if existed {
         let _ = tokio::fs::remove_file(&temp_path).await;
     } else {
-        tokio::fs::rename(&temp_path, &final_path).await?;
+        if let Err(error) = tokio::fs::rename(&temp_path, &final_path).await {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(error.into());
+        }
     }
-    let final_name = unique_name(&state, &link.object_id, &name).await?;
+
     let file_id = crate::ids::new_id("f");
     let created_at = now();
 
-    let mut tx = state.shared.pool().begin().await?;
-    quota::reserve(&mut tx, &link.object_id, &link.id, size, state.quotas()).await?;
-    sqlx::query(
-        "INSERT INTO workspace_files
-         (id, workspace_id, parent_id, name, blob_hash, size, mime, rev, created_at)
-         VALUES (?, ?, NULL, ?, ?, ?, ?, 1, ?)",
-    )
-    .bind(&file_id)
-    .bind(&link.object_id)
-    .bind(&final_name)
-    .bind(&blob_hash)
-    .bind(i64::try_from(size).unwrap_or(i64::MAX))
-    .bind(&mime)
-    .bind(created_at)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO blobs (hash, scope, size, refcount, created_at)
-         VALUES (?, 'shared', ?, 1, ?)
-         ON CONFLICT(hash, scope) DO UPDATE SET refcount = refcount + 1",
-    )
-    .bind(&blob_hash)
-    .bind(i64::try_from(size).unwrap_or(i64::MAX))
-    .bind(created_at)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO uploads (id, link_id, workspace_id, blob_hash, name, mime, size, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'complete', ?)",
-    )
-    .bind(crate::ids::new_id("up"))
-    .bind(&link.id)
-    .bind(&link.object_id)
-    .bind(&blob_hash)
-    .bind(&final_name)
-    .bind(&mime)
-    .bind(i64::try_from(size).unwrap_or(i64::MAX))
-    .bind(created_at)
-    .execute(&mut *tx)
-    .await?;
-    // 本体在流式阶段已经落到内容寻址路径，这里只提交元数据。
+    let inserted: Result<(), AppError> = async {
+        sqlx::query(
+            "INSERT INTO workspace_files
+             (id, workspace_id, parent_id, name, blob_hash, size, mime, rev, created_at)
+             VALUES (?, ?, NULL, ?, ?, ?, ?, 1, ?)",
+        )
+        .bind(&file_id)
+        .bind(&link.object_id)
+        .bind(&final_name)
+        .bind(&blob_hash)
+        .bind(i64::try_from(size).unwrap_or(i64::MAX))
+        .bind(&mime)
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO blobs (hash, scope, size, refcount, created_at)
+             VALUES (?, 'shared', ?, 1, ?)
+             ON CONFLICT(hash, scope) DO UPDATE SET refcount = refcount + 1",
+        )
+        .bind(&blob_hash)
+        .bind(i64::try_from(size).unwrap_or(i64::MAX))
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO uploads (id, link_id, workspace_id, blob_hash, name, mime, size, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'complete', ?)",
+        )
+        .bind(crate::ids::new_id("up"))
+        .bind(&link.id)
+        .bind(&link.object_id)
+        .bind(&blob_hash)
+        .bind(&final_name)
+        .bind(&mime)
+        .bind(i64::try_from(size).unwrap_or(i64::MAX))
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = inserted {
+        // 只有本次新建的副本才回滚；已有的同内容副本由其他引用持有。
+        if !existed {
+            let _ = tokio::fs::remove_file(&final_path).await;
+        }
+        return Err(error);
+    }
     tx.commit().await?;
 
     state.events.publish(&link.object_id, 1);
@@ -327,7 +360,7 @@ pub async fn rename(
     if !can_manage_files(link.file_scopes) {
         return Err(AppError::Forbidden);
     }
-    require_passphrase(&link, &headers)?;
+    require_passphrase(&state, &link, &headers).await?;
 
     let name =
         sanitize_file_name(&request.name).map_err(|_| AppError::BadRequest("invalid_file_name"))?;
@@ -387,7 +420,7 @@ pub async fn delete(
     if !can_manage_files(link.file_scopes) {
         return Err(AppError::Forbidden);
     }
-    require_passphrase(&link, &headers)?;
+    require_passphrase(&state, &link, &headers).await?;
 
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT blob_hash, size FROM workspace_files
@@ -400,7 +433,7 @@ pub async fn delete(
     let (blob_hash, size) = row.ok_or(AppError::NotFound)?;
 
     let mut tx = state.shared.pool().begin().await?;
-    sqlx::query(
+    let deleted = sqlx::query(
         "UPDATE workspace_files SET deleted_at = ?, rev = rev + 1
          WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL",
     )
@@ -408,8 +441,19 @@ pub async fn delete(
     .bind(&file_id)
     .bind(&link.object_id)
     .execute(&mut *tx)
-    .await?;
+    .await?
+    .rows_affected();
+    if deleted != 1 {
+        // 并发 DELETE：只有真正把行标为删除的请求才能释放配额/减引用。
+        return Err(AppError::NotFound);
+    }
     quota::release(&mut tx, &link.object_id, u64::try_from(size).unwrap_or(0)).await?;
+    // 链接配额按 `uploads` 生命周期累计；删除文件时同步清掉对应行。
+    sqlx::query("DELETE FROM uploads WHERE workspace_id = ? AND blob_hash = ?")
+        .bind(&link.object_id)
+        .bind(&blob_hash)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ? AND scope = 'shared'")
         .bind(&blob_hash)
         .execute(&mut *tx)
@@ -450,7 +494,7 @@ pub async fn download(
     let link = load_link(&state, &token, ShareKind::Workspace).await?;
     let workspace = load_workspace(&state, &link.object_id).await?;
     ensure_public(&workspace)?;
-    require_passphrase(&link, &headers)?;
+    require_passphrase(&state, &link, &headers).await?;
     if !can_read_files(link.file_scopes) {
         return Err(AppError::Forbidden);
     }

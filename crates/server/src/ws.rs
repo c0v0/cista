@@ -6,6 +6,7 @@
 //!
 //! 只读（`note=ro`）连接照常收 sync/awareness，但其 `update` 在服务端被丢弃（ADR 0006）。
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
@@ -23,6 +24,12 @@ use crate::wire::{self, WireMessage};
 use crate::yjs::{apply_client_update, WorkspaceDoc};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 握手 JSON 上限：正常请求只有几百字节。
+pub const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
+/// 单条 y-sync 消息上限，与 `yjs::MAX_UPDATE_BYTES` 一致。
+pub const MAX_WS_MESSAGE: usize = crate::yjs::MAX_UPDATE_BYTES;
+/// awareness 只转发光标，超过这个大小一律拒绝。
+pub const MAX_AWARENESS_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +47,9 @@ struct Handshake {
     ts: Option<i64>,
     #[serde(default)]
     sig: Option<String>,
+    /// 分享模式下的口令（与文件端点同一个 `x-share-passphrase` 语义）。
+    #[serde(default)]
+    passphrase: Option<String>,
 }
 
 struct Session {
@@ -50,13 +60,17 @@ struct Session {
 enum Outcome {
     /// 只回给当前连接（SyncStep2）。
     Reply(Vec<u8>),
-    /// 发给同工作区的其他连接（增量 update / awareness）。
-    Broadcast(Vec<u8>),
+    /// 发给同工作区的其他连接（增量 update / awareness）；`Arc` 避免为每个订阅者复制。
+    Broadcast(Arc<[u8]>),
     /// 丢弃（只读连接的 update 等）。
     None,
 }
 
 pub async fn handler(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+    // 握手消息很小；之后的 y-sync 帧仍受 `MAX_WS_MESSAGE`（= 单 update 上限）约束。
+    let upgrade = upgrade
+        .max_message_size(MAX_WS_MESSAGE)
+        .max_frame_size(MAX_WS_MESSAGE);
     upgrade.on_upgrade(move |socket| async move {
         if let Err(error) = run_session(state, socket).await {
             tracing::info!(error = ?error, "ws session closed");
@@ -115,7 +129,7 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
             broadcast = broadcasts.recv() => {
                 match broadcast {
                     Ok(frame) => {
-                        if sink.send(WsMessage::Binary(frame.into())).await.is_err() {
+                        if sink.send(WsMessage::Binary(frame.to_vec().into())).await.is_err() {
                             break;
                         }
                     }
@@ -138,8 +152,19 @@ async fn read_handshake(socket: &mut WebSocket) -> Result<Vec<u8>, AppError> {
         .await
         .map_err(|_| AppError::Unauthorized)?;
     match frame {
-        Some(Ok(WsMessage::Text(text))) => Ok(text.as_str().as_bytes().to_vec()),
-        Some(Ok(WsMessage::Binary(bytes))) => Ok(bytes.to_vec()),
+        Some(Ok(WsMessage::Text(text))) => {
+            let bytes = text.as_str().as_bytes();
+            if bytes.len() > MAX_HANDSHAKE_BYTES {
+                return Err(AppError::PayloadTooLarge);
+            }
+            Ok(bytes.to_vec())
+        }
+        Some(Ok(WsMessage::Binary(bytes))) => {
+            if bytes.len() > MAX_HANDSHAKE_BYTES {
+                return Err(AppError::PayloadTooLarge);
+            }
+            Ok(bytes.to_vec())
+        }
         _ => Err(AppError::Unauthorized),
     }
 }
@@ -157,6 +182,8 @@ async fn authenticate(state: &AppState, raw: &[u8]) -> Result<Session, AppError>
             if link.object_id != handshake.object {
                 return Err(AppError::Forbidden);
             }
+            crate::public::require_passphrase_value(state, &link, handshake.passphrase.as_deref())
+                .await?;
             let workspace = load_workspace(state, &link.object_id).await?;
             ensure_public(&workspace)?;
             if !can_read_notes(link.note_scopes) {
@@ -194,7 +221,7 @@ async fn authenticate(state: &AppState, raw: &[u8]) -> Result<Session, AppError>
                 .replay
                 .lock()
                 .map_err(|_| AppError::Internal(anyhow::anyhow!("replay cache poisoned")))?
-                .check_and_record(device, nonce_hex, now());
+                .check_and_record(device, &nonce, now());
             if !fresh {
                 return Err(AppError::Unauthorized);
             }
@@ -220,17 +247,23 @@ async fn handle_frame(
     match message {
         WireMessage::SyncStep1(state_vector) => {
             let diff = doc.diff_since(&state_vector)?;
+            if diff.len() > crate::yjs::MAX_DOC_BYTES {
+                return Err(AppError::PayloadTooLarge);
+            }
             Ok(Outcome::Reply(wire::sync_step2(&diff)))
         }
         WireMessage::SyncStep2(update) | WireMessage::Update(update) => {
             match apply_client_update(state, doc, &update, session.can_write).await? {
-                Some(bytes) => Ok(Outcome::Broadcast(wire::update(&bytes))),
+                Some(bytes) => Ok(Outcome::Broadcast(Arc::from(wire::update(&bytes)))),
                 None => Ok(Outcome::None),
             }
         }
         WireMessage::Awareness(payload) => {
+            if payload.len() > MAX_AWARENESS_BYTES {
+                return Err(AppError::PayloadTooLarge);
+            }
             // v1 只转发光标，不落库（awareness 是临时状态）。
-            Ok(Outcome::Broadcast(wire::awareness(&payload)))
+            Ok(Outcome::Broadcast(Arc::from(wire::awareness(&payload))))
         }
         WireMessage::AwarenessQuery | WireMessage::Other => Ok(Outcome::None),
     }

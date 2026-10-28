@@ -121,11 +121,25 @@ async fn ip_limit(
     if request.uri().path() == "/healthz" {
         return Ok(next.run(request).await);
     }
-    let peer = request
+    let peer_ip = request
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0.ip().to_string());
-    let key = match peer {
+        .map(|info| info.0.ip());
+    // 反代部署：只有来自回环地址的请求才采信 X-Forwarded-For（Caddy 直连 127.0.0.1）。
+    let client = if state.cfg.trust_proxy && peer_ip.map(|ip| ip.is_loopback()).unwrap_or(false) {
+        request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|raw| raw.split(',').next())
+            .map(str::trim)
+            .filter(|candidate| candidate.parse::<std::net::IpAddr>().is_ok())
+            .map(str::to_string)
+            .or_else(|| peer_ip.map(|ip| ip.to_string()))
+    } else {
+        peer_ip.map(|ip| ip.to_string())
+    };
+    let key = match client {
         Some(ip) => format!("ip:{ip}"),
         None => "ip:unknown".to_string(),
     };

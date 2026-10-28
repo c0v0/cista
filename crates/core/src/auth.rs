@@ -153,9 +153,12 @@ impl ReplayCache {
     }
 
     /// 记录 `(device, nonce)`；返回 `false` 表示重放（窗口内已见过）。
-    pub fn check_and_record(&mut self, device_id: &str, nonce_hex: &str, now: i64) -> bool {
+    ///
+    /// 键使用 nonce 的规范字节编码，调用方无论从 header 收到大写还是小写 hex，
+    /// 都会落到同一条记录（否则大小写变体可绕过重放检测）。
+    pub fn check_and_record(&mut self, device_id: &str, nonce: &[u8], now: i64) -> bool {
         self.prune(now);
-        let key = format!("{device_id}:{nonce_hex}");
+        let key = format!("{device_id}:{}", hex::encode(nonce));
         if self.seen.contains_key(&key) {
             return false;
         }
@@ -291,16 +294,27 @@ mod tests {
     #[test]
     fn nonce_replay_is_rejected_and_pruned() {
         let mut cache = ReplayCache::new(300);
-        assert!(cache.check_and_record("dev", "aa", 1000));
-        assert!(!cache.check_and_record("dev", "aa", 1001));
+        assert!(cache.check_and_record("dev", &[0xaa], 1000));
+        assert!(!cache.check_and_record("dev", &[0xaa], 1001));
         // 不同设备同一 nonce 视为不同条目。
-        assert!(cache.check_and_record("dev2", "aa", 1001));
+        assert!(cache.check_and_record("dev2", &[0xaa], 1001));
         assert_eq!(cache.len(), 2);
 
         // 超过 TTL 后旧条目被清理；再次记录同一 nonce 成功，且只剩这一条。
-        assert!(cache.check_and_record("dev", "aa", 1301));
+        assert!(cache.check_and_record("dev", &[0xaa], 1301));
         assert_eq!(cache.len(), 1);
-        assert!(!cache.check_and_record("dev", "aa", 1302));
+        assert!(!cache.check_and_record("dev", &[0xaa], 1302));
+    }
+
+    #[test]
+    fn nonce_case_variants_share_one_replay_entry() {
+        // 服务端从 header 解析 hex，大小写不影响字节；缓存必须按字节规范化。
+        let mut cache = ReplayCache::new(300);
+        let lower = hex::decode("0a0b").unwrap();
+        let upper = hex::decode("0A0B").unwrap();
+        assert!(cache.check_and_record("dev", &lower, 1000));
+        assert!(!cache.check_and_record("dev", &upper, 1001));
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]

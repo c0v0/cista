@@ -90,14 +90,23 @@ pub async fn create(
     let file_bits = file_scopes(request.files_mode);
     validate_scopes(note_bits, file_bits).map_err(|_| AppError::BadRequest("invalid_scopes"))?;
 
-    // `drop` 默认要求口令（`design.md` §3.7）。
-    if request.files_mode == FilesMode::Drop && request.passphrase.is_none() {
+    // `drop` 默认要求口令（`design.md` §3.7）；空白口令按未填处理。
+    let passphrase = request
+        .passphrase
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if request.files_mode == FilesMode::Drop && passphrase.is_none() {
         return Err(AppError::BadRequest("passphrase_required"));
     }
-    let passphrase_hash = match request.passphrase.as_deref() {
-        Some(passphrase) if !passphrase.is_empty() => Some(hash_passphrase(passphrase)?),
-        _ => None,
+    let passphrase_hash = match passphrase {
+        Some(passphrase) => Some(hash_passphrase(passphrase)?),
+        None => None,
     };
+    // 工作区链接的“使用次数”没有可靠的计数语义（正文走 WS），明确拒绝而不是静默忽略。
+    if request.kind == ShareKind::Workspace && request.max_uses.is_some() {
+        return Err(AppError::BadRequest("max_uses_not_supported"));
+    }
 
     let timestamp = now();
     let (object_id, title) = match request.kind {

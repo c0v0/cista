@@ -59,6 +59,17 @@ fn row_to_info(row: WorkspaceRow) -> Result<WorkspaceInfo, AppError> {
 const WORKSPACE_COLUMNS: &str =
     "id, title, origin, source_note_id, state, expires_at, quarantined_at, archived_at, created_at";
 
+/// 已到期的 active 工作区在 gc 之前也应允许导出/归档。
+fn transitionable(workspace: &WorkspaceInfo) -> bool {
+    matches!(
+        workspace.state,
+        WorkspaceState::Expired | WorkspaceState::Quarantined
+    ) || workspace
+        .expires_at
+        .map(|expires_at| expires_at <= now())
+        .unwrap_or(false)
+}
+
 async fn load_workspace(state: &AppState, id: &str) -> Result<WorkspaceInfo, AppError> {
     let sql = format!("SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE id = ?");
     let row: Option<WorkspaceRow> = sqlx::query_as(&sql)
@@ -90,10 +101,7 @@ pub async fn restore(
     Path(id): Path<String>,
 ) -> Result<Json<WorkspaceInfo>, AppError> {
     let workspace = load_workspace(&state, &id).await?;
-    if !matches!(
-        workspace.state,
-        WorkspaceState::Expired | WorkspaceState::Quarantined
-    ) {
+    if !transitionable(&workspace) {
         return Err(AppError::BadRequest("workspace_not_quarantined"));
     }
 
@@ -118,10 +126,7 @@ pub async fn archive_complete(
     Path(id): Path<String>,
 ) -> Result<Json<WorkspaceInfo>, AppError> {
     let workspace = load_workspace(&state, &id).await?;
-    if !matches!(
-        workspace.state,
-        WorkspaceState::Expired | WorkspaceState::Quarantined
-    ) {
+    if !transitionable(&workspace) {
         return Err(AppError::BadRequest("workspace_not_quarantined"));
     }
 

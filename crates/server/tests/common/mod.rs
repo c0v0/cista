@@ -25,6 +25,8 @@ pub struct TestApp {
     pub state: AppState,
     pub router: Router,
     pub dir: TempDir,
+    /// 首台设备的种子：bootstrap 只能消费一次，后续入网用这台设备签名。
+    admin_seed: tokio::sync::Mutex<Option<[u8; 32]>>,
 }
 
 impl TestApp {
@@ -49,7 +51,12 @@ impl TestApp {
         .expect("open shared db");
         let state = AppState::new(config, private, shared);
         let router = cista_server::app(state.clone());
-        Self { state, router, dir }
+        Self {
+            state,
+            router,
+            dir,
+            admin_seed: tokio::sync::Mutex::new(None),
+        }
     }
 
     pub async fn send(&self, request: Request<Body>) -> (StatusCode, Vec<u8>) {
@@ -70,21 +77,32 @@ impl TestApp {
         (status, bytes)
     }
 
-    /// 用 bootstrap token 入网一台设备。
+    /// 入网一台设备：首台用 bootstrap token（只能消费一次），之后用首台设备签名。
     pub async fn enroll(&self, name: &str) -> DeviceSecret {
-        let secret = DeviceSecret::generate().expect("device key");
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).expect("seed");
+        let secret = DeviceSecret::from_seed(&seed);
         let body = serde_json::json!({
             "name": name,
             "pubkey": hex::encode(secret.public_key()),
         })
         .to_string();
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/devices/enroll")
-            .header("authorization", format!("Bootstrap {BOOTSTRAP}"))
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .expect("enroll request");
+        let request = {
+            let admin = self.admin_seed.lock().await;
+            match admin.as_ref() {
+                None => Request::builder()
+                    .method("POST")
+                    .uri("/api/devices/enroll")
+                    .header("authorization", format!("Bootstrap {BOOTSTRAP}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("enroll request"),
+                Some(seed) => {
+                    let signer = DeviceSecret::from_seed(seed);
+                    self.signed_with(&signer, "POST", "/api/devices/enroll", body.as_bytes(), &[])
+                }
+            }
+        };
         let (status, bytes) = self.send(request).await;
         assert_eq!(
             status,
@@ -94,6 +112,10 @@ impl TestApp {
         );
         let response: EnrollResponse = serde_json::from_slice(&bytes).expect("enroll json");
         assert_eq!(response.device_id, secret.device_id());
+        let mut admin = self.admin_seed.lock().await;
+        if admin.is_none() {
+            *admin = Some(seed);
+        }
         secret
     }
 

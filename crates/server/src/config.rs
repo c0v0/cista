@@ -25,6 +25,10 @@ pub struct Config {
     /// 跨域部署时的前端 origin（`design.md` §4.2）；为空表示只接受同源。
     pub cors_origin: Option<String>,
     pub log_json: bool,
+    /// 是否信任来自回环地址的 `X-Forwarded-For`（反代部署必须开启，否则所有客户端共用一个 IP 桶）。
+    pub trust_proxy: bool,
+    /// 写入前要求的最小磁盘可用空间；低于该值直接拒绝上传。
+    pub min_free_bytes: u64,
 }
 
 /// 配额三元组，随请求传递。
@@ -106,6 +110,19 @@ impl Config {
             .map(|v| v != "pretty")
             .unwrap_or(true);
 
+        // 生产默认 fail-closed：没有静态密钥就不启动（除非显式允许明文）。
+        let allow_plaintext = std::env::var("CISTA_ALLOW_PLAINTEXT")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if static_key.is_none() && !allow_plaintext {
+            return Err(ConfigError::Invalid("CISTA_STATIC_KEY"));
+        }
+
+        let trust_proxy = std::env::var("CISTA_TRUST_PROXY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let min_free_bytes = parse_u64("CISTA_MIN_FREE_BYTES").unwrap_or(512 * MIB);
+
         Ok(Self {
             bind,
             data_dir,
@@ -119,6 +136,8 @@ impl Config {
             rate_burst,
             cors_origin,
             log_json,
+            trust_proxy,
+            min_free_bytes,
         })
     }
 
@@ -137,6 +156,8 @@ impl Config {
             rate_burst: 120,
             cors_origin: None,
             log_json: false,
+            trust_proxy: false,
+            min_free_bytes: 0,
         }
     }
 }
