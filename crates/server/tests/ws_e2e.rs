@@ -176,3 +176,45 @@ async fn ws_sync_converges_and_drops_readonly_updates() {
     assert_eq!(text_of(&doc_b), "AAABBB!");
     assert_eq!(server_doc.text(), "AAABBB!");
 }
+
+#[tokio::test]
+async fn oversized_handshake_is_rejected() {
+    let app = TestApp::new().await;
+    let device = app.enroll("ws-device").await;
+    let workspace = app.create_workspace(&device, "WS oversize").await;
+    let (request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Ro,
+        FilesMode::Ro,
+    );
+    let (status, _) = app.create_link(&device, request).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let router = app.router.clone();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve");
+    });
+
+    let (mut ws, _) = connect_async(format!("ws://{addr}/ws"))
+        .await
+        .expect("connect");
+    let big = json!({
+        "v": 1,
+        "mode": "share",
+        "token": token,
+        "object": workspace.id,
+        "pad": "x".repeat(100 * 1024),
+    });
+    let _ = ws.send(TMessage::Text(big.to_string().into())).await;
+
+    // 服务端应在握手阶段拒绝超限帧并关闭连接，不会返回 SyncStep1。
+    let next = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+    match next {
+        Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(TMessage::Close(_)))) => {}
+        Ok(Some(Ok(other))) => panic!("expected close, got {other:?}"),
+        Err(_) => panic!("server did not close oversized handshake"),
+    }
+}

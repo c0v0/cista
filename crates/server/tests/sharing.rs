@@ -657,3 +657,81 @@ async fn ticket_can_be_reused_within_window() {
         assert_eq!(downloaded, b"retry-bytes");
     }
 }
+
+#[tokio::test]
+async fn quota_rejection_leaves_no_orphan_blob() {
+    // 工作区配额 64 KiB；上传 128 KiB：文件本身在 max_file_bytes 之内，但预留失败。
+    let app = TestApp::with_config(|cfg| {
+        cfg.workspace_quota_bytes = 64 * 1024;
+        cfg.instance_quota_bytes = 1024 * 1024;
+        cfg.link_quota_bytes = 1024 * 1024;
+    })
+    .await;
+    let device = app.enroll("desktop").await;
+    let workspace = app.create_workspace(&device, "quota").await;
+    let (request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Off,
+        FilesMode::Rw,
+    );
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    let payload = vec![7u8; 128 * 1024];
+
+    let (status, body) = upload(
+        &app,
+        &token,
+        "big.bin",
+        "text/plain",
+        &payload,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let (status, body) = list_files(&app, &token).await;
+    assert_eq!(status, StatusCode::OK);
+    let page: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(page["files"].as_array().map(Vec::len), Some(0));
+
+    let mut entries = tokio::fs::read_dir(app.state.shared.blobs_dir())
+        .await
+        .expect("blobs dir");
+    assert!(
+        entries.next_entry().await.expect("entry").is_none(),
+        "quota 失败后不应留下共享 blob"
+    );
+}
+
+#[tokio::test]
+async fn outstanding_tickets_are_capped_per_link() {
+    let app = TestApp::new().await;
+    let device = app.enroll("desktop").await;
+    let blob = app.upload_private_blob(&device, b"ticket-cap").await;
+    let (request, token) = link_request(ShareKind::File, &blob.hash, NoteMode::Off, FilesMode::Ro);
+    assert_eq!(
+        app.create_link(&device, request).await.0,
+        StatusCode::CREATED
+    );
+
+    for _ in 0..12 {
+        let (status, _) = app
+            .send(app.public("POST", "/public/files/confirm", &token, b"", &[]))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blob_tickets")
+        .fetch_one(app.state.shared.pool())
+        .await
+        .expect("count tickets");
+    assert!(count <= 8, "tickets={count}");
+}
