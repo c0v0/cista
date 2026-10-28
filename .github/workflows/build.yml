@@ -203,6 +203,8 @@ jobs:
       - name: Init Android project
         working-directory: apps/desktop/src-tauri
         run: pnpm dlx @tauri-apps/cli@2.12.4 android init --ci
+      - name: Harden Android manifest
+        run: python3 scripts/android-manifest.py
       - name: Build APK
         working-directory: apps/desktop/src-tauri
         run: |

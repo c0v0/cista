@@ -175,9 +175,18 @@ pub async fn upload(
     }
     // 先预留配额，再让文件进入最终路径：预留失败时磁盘上不会留下不计账的副本。
     let final_path = state.shared.blob_path(&blob_hash);
+    // 先判断物理副本是否已存在：去重时实例配额只记一次。
+    let existed = tokio::fs::try_exists(&final_path).await?;
     let mut tx = state.shared.pool().begin().await?;
-    if let Err(error) =
-        quota::reserve(&mut tx, &link.object_id, &link.id, size, state.quotas()).await
+    if let Err(error) = quota::reserve(
+        &mut tx,
+        &link.object_id,
+        &link.id,
+        size,
+        state.quotas(),
+        !existed,
+    )
+    .await
     {
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(error);
@@ -189,7 +198,6 @@ pub async fn upload(
             return Err(error);
         }
     };
-    let existed = tokio::fs::try_exists(&final_path).await?;
     if existed {
         let _ = tokio::fs::remove_file(&temp_path).await;
     } else {

@@ -111,7 +111,8 @@ async fn cleanup_orphan_blobs(shared: &SharedStore, timestamp: i64) -> anyhow::R
     while let Some(entry) = entries.next_entry().await? {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name.starts_with('.') || name.len() != 64 {
+        let is_tmp = name.ends_with(".tmp");
+        if !is_tmp && (name.starts_with('.') || name.len() != 64) {
             continue;
         }
         let metadata = entry.metadata().await?;
@@ -125,6 +126,12 @@ async fn cleanup_orphan_blobs(shared: &SharedStore, timestamp: i64) -> anyhow::R
             .map(|elapsed| elapsed.as_secs())
             .unwrap_or(0);
         if age < 3600 {
+            continue;
+        }
+        if is_tmp {
+            // 上传中断留下的临时文件：超过 1 小时直接清掉。
+            let _ = tokio::fs::remove_file(entry.path()).await;
+            removed += 1;
             continue;
         }
         let exists: Option<(i64,)> =

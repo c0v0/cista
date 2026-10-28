@@ -18,6 +18,12 @@ import javax.crypto.spec.GCMParameterSpec
 /** 用 AndroidKeyStore 里的 AES 密钥保护设备种子与 MK；密钥不可导出。 */
 @TauriPlugin
 class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
+  /** 只允许设备种子与 MK；与 Web/Rust 侧白名单保持一致。 */
+  private fun isValidKey(key: String): Boolean {
+    if (key == "master-key") return true
+    if (!key.startsWith("device-seed:") || key.length != 44) return false
+    return key.substring(12).all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+  }
   private val prefs = activity.getSharedPreferences("cista-secrets", Context.MODE_PRIVATE)
 
   private fun secretKey(): SecretKey {
@@ -54,6 +60,7 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun secret_save(invoke: Invoke) {
     val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
+    if (!isValidKey(key)) return invoke.reject("unknown secret key")
     val value = invoke.getArgs().getString("value") ?: return invoke.reject("missing value")
     prefs.edit().putString(key, encrypt(value)).apply()
     invoke.resolve()
@@ -62,6 +69,7 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun secret_load(invoke: Invoke) {
     val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
+    if (!isValidKey(key)) return invoke.reject("unknown secret key")
     val result = prefs.getString(key, null)?.let { decrypt(it) }
     val out = app.tauri.plugin.JSObject()
     out.put("value", result)
@@ -71,6 +79,7 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun secret_delete(invoke: Invoke) {
     val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
+    if (!isValidKey(key)) return invoke.reject("unknown secret key")
     prefs.edit().remove(key).apply()
     invoke.resolve()
   }

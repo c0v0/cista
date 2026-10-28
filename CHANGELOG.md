@@ -96,3 +96,6 @@
 - 部署：systemd 加 `WorkingDirectory`、备份 unit 可读写数据目录并在快照前先 gc、
   `deploy/{cista,backup}.env.example`、Docker `init-data` 修正 `./data` 属主、Caddy >=2.7 说明。
 - CI：修复 CR 剥离语法、PR 不执行签名、Tauri CLI 固定 2.12.4。
+- 去重上传不再重复计实例配额；GC 清理超过 1 小时的 `.tmp` 残留。
+- Android：Keystore 插件校验键名白名单；CI 在生成的 manifest 上关闭 `allowBackup` 与明文流量。
+- Web：`index.html` 加 `referrer: no-referrer`。

@@ -11,23 +11,28 @@ use crate::config::Quotas;
 use crate::error::AppError;
 
 /// 预留 `bytes`：实例 + 工作区 + 链接三层上限。
+///
+/// `count_instance=false` 用于内容去重：物理 blob 已存在时实例总量不重复计。
 pub async fn reserve(
     tx: &mut Transaction<'_, Sqlite>,
     workspace_id: &str,
     link_id: &str,
     bytes: u64,
     quotas: Quotas,
+    count_instance: bool,
 ) -> Result<(), AppError> {
     let bytes = i64::try_from(bytes).map_err(|_| AppError::Quota("instance"))?;
     lock_instance(tx).await?;
 
-    let instance_used: i64 = sqlx::query_scalar(
-        "SELECT bytes FROM usage_counters WHERE scope = 'instance' AND key = 'total'",
-    )
-    .fetch_one(&mut **tx)
-    .await?;
-    if instance_used.saturating_add(bytes) > to_i64(quotas.instance_bytes) {
-        return Err(AppError::Quota("instance"));
+    if count_instance {
+        let instance_used: i64 = sqlx::query_scalar(
+            "SELECT bytes FROM usage_counters WHERE scope = 'instance' AND key = 'total'",
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        if instance_used.saturating_add(bytes) > to_i64(quotas.instance_bytes) {
+            return Err(AppError::Quota("instance"));
+        }
     }
 
     sqlx::query(
@@ -59,12 +64,14 @@ pub async fn reserve(
         return Err(AppError::Quota("link"));
     }
 
-    sqlx::query(
-        "UPDATE usage_counters SET bytes = bytes + ? WHERE scope = 'instance' AND key = 'total'",
-    )
-    .bind(bytes)
-    .execute(&mut **tx)
-    .await?;
+    if count_instance {
+        sqlx::query(
+            "UPDATE usage_counters SET bytes = bytes + ? WHERE scope = 'instance' AND key = 'total'",
+        )
+        .bind(bytes)
+        .execute(&mut **tx)
+        .await?;
+    }
     sqlx::query(
         "UPDATE usage_counters SET bytes = bytes + ? WHERE scope = 'workspace' AND key = ?",
     )
