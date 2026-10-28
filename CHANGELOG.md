@@ -51,3 +51,28 @@
 - `./scripts/verify.sh`：web build → fmt → clippy → test → deny → web tests
 - 恢复脚本与演练种子/校验用例（`tests/drill.rs`）
 - 跨语言 KAT（`cargo run -p cista-core --example vectors`）保证 JS 与 Rust 加密/签名一致
+
+## 安全修复（2026-10 审计）
+
+### 服务端
+- 认证前按路由限制请求体并加并发预算，`/ws` 设置帧/消息上限；awareness 与同步帧有字节上限，
+  广播改为 `Arc` + 32 深度队列。
+- 分享上传改为「预留配额 → 落盘 → 记账」，失败清理；GC 增加孤儿 blob 扫描与磁盘水位。
+- `/ws` 分享握手强制校验口令（Argon2 移入 blocking 线程池并限并发）；SSE 同样受保护。
+- 反代部署按 `CISTA_TRUST_PROXY` 采信回环地址的 `X-Forwarded-For`；失败退避键加入 peer。
+- nonce 重放缓存按规范字节建键（大小写变体不再绕过）；bootstrap token 一次性消费。
+- 工作区 `expires_at` 立即生效（公网 410）；GC 将到期工作区转入隔离区；
+  workspace 链接拒绝 `max_uses`（无可靠计数语义）。
+- 下载改为分块流式解密；删除/归档的 refcount 与配额更新加并发保护；票据每链接上限 8 张。
+- `CISTA_STATIC_KEY` 缺失时默认拒绝启动（`CISTA_ALLOW_PLAINTEXT=1` 仅限开发）。
+
+### 客户端 / 部署
+- Android 敏感键（设备种子/MK）在 Keystore 不可用时 fail-closed，并清理旧版明文条目。
+- Tauri CSP 允许 `https:`/`wss:` 与本地开发源，原生端可连接用户填写的服务器。
+- 换服务器时清除设备种子与 MK；配对页文案与实际密钥存放一致。
+- Caddy 日志剔除 `Authorization`/`Cookie`/`X-Share-Token`/`X-Share-Passphrase`，
+  分享面响应加 `default-src 'none'; sandbox`，站点 CSP 加 `frame-ancestors 'none'`。
+- systemd/备份 unit 加固（UMask、ProtectSystem、CapabilityBoundingSet 等），compose 只读根、
+  `cap_drop: ALL`、内存/PID 限制；新增 `cista-gc.{service,timer}`。
+- Android 签名不再把口令写进 `build.gradle.kts`（改用 apksigner `env:`/`keytool -storepass:env`），
+  删除 `scripts/android-signing.py`。

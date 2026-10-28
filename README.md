@@ -24,7 +24,7 @@
 | 客户端 | Web / Linux / Windows / Android 共用一套 SPA：首次启动填服务器地址、配对、笔记编辑器、附件、本地搜索索引（内存、不落盘） |
 | 原生能力 | Tauri 2 壳 + `plugins/keystore`：桌面走 Secret Service / Credential Manager，Android 走 AndroidKeyStore；只允许存设备种子，MK 不入系统凭据库 |
 
-测试规模：Rust **118 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+测试规模：Rust **120 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
 Web **96 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
 门禁 `./scripts/verify.sh`：web build → rustfmt → clippy → test → deny → web tests。
 
@@ -118,3 +118,15 @@ deploy/         systemd unit/timer、Caddyfile（静态站点 + API 反代）
 - 漏洞报告（请勿开公开 issue）：`SECURITY.md`
 - 变更记录：`CHANGELOG.md`
 - 许可证：MIT（见 `LICENSE`）
+
+## 公网部署安全基线（审计后新增）
+
+- **必填 `CISTA_STATIC_KEY`**：未设置时服务端拒绝启动；仅本地开发可显式设 `CISTA_ALLOW_PLAINTEXT=1`。
+- **反代后必须设 `CISTA_TRUST_PROXY=1`**（systemd unit 已内置）：只对来自回环地址的请求采信
+  `X-Forwarded-For`，否则所有客户端会共用一个限速桶。
+- **Caddy 访问日志已剔除凭据头**（`Authorization`/`Cookie`/`X-Share-Token`/`X-Share-Passphrase`）；
+  部署后可用 `grep -c '"Authorization"' /var/log/caddy/cista.log` 应得到 0。
+- **GC 定时器**：`deploy/cista-gc.{service,timer}` 每小时清理过期链接/票据、把到期工作区转入隔离区，
+  并删除无数据库行的孤儿共享 blob；不装定时器时磁盘与配额会持续漂移。
+- **磁盘水位**：`CISTA_MIN_FREE_BYTES`（默认 512 MiB），低于该值上传直接 507。
+- 上传/下载均为流式：单请求内存占用与文件大小无关（下载分块解密）。

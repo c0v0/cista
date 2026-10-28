@@ -97,10 +97,9 @@ export function PairPage({
         ) : null}
       </p>
       <p className="hint">
-        主密钥只保存在本页内存里：刷新即锁定，需要粘贴恢复码重新解锁。
         {store
-          ? " 桌面端会把设备私钥存进系统钥匙串（不存 MK），刷新后无需重新入网。"
-          : " Web 端设备私钥也只存在内存。"}
+          ? "设备种子与主密钥保存在本机系统安全存储（桌面钥匙串 / Android Keystore）；「锁定」会清除本机保存的主密钥。"
+          : "Web 端没有系统安全存储：设备私钥与主密钥只在内存里，刷新即锁定。"}
       </p>
       {remembered ? (
         <p className="hint">

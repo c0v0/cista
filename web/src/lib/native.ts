@@ -20,14 +20,22 @@ export function tauriInvoke(): Invoke | null {
   return typeof invoke === "function" ? (invoke as Invoke) : null;
 }
 
+/** 设备种子与 MK 只能进系统安全存储；插件不可用时必须失败而不是降级。 */
+function isSensitiveKey(key: string): boolean {
+  return key === "master-key" || key.startsWith("device-seed:");
+}
+
 async function invokeSecret(
   invoke: Invoke,
   command: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  const key = typeof args.key === "string" ? args.key : "";
   try {
     return await invoke(`plugin:${PLUGIN}|${command}`, args);
-  } catch {
+  } catch (error) {
+    // 敏感键绝不回退到宿主命令（Android 的宿主实现只是非敏感键兜底）。
+    if (isSensitiveKey(key)) throw error;
     return await invoke(command, args);
   }
 }

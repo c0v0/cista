@@ -15,3 +15,14 @@ StandardError=journal
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+
+# 快照里有分享 token 哈希、口令哈希和可能未加密的共享 blob：权限必须与主服务一致。
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/srv/cista/backup

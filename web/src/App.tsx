@@ -3,7 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { resolveApiBase } from "./lib/apiBase";
 import { desktopSecretStore, tauriInvoke } from "./lib/native";
 import type { Session } from "./lib/notesApi";
-import { forgetMasterKey, restoreDevice, restoreMasterKey } from "./lib/rememberedDevice";
+import {
+  forgetMasterKey,
+  forgetRememberedDevice,
+  restoreDevice,
+  restoreMasterKey,
+} from "./lib/rememberedDevice";
 import {
   describeServer,
   initialServerBase,
@@ -78,8 +83,13 @@ export function App() {
     writeServerBase(base);
     setServerBase(base);
     setConfigured(true);
-    // 换服务器等于换身份：旧 session 的设备/密钥对新服务端无意义。
+    // 换服务器等于换身份：清掉内存会话与系统存储里的设备种子/MK。
     setSession(null);
+    const store = desktopSecretStore();
+    if (store) {
+      void forgetMasterKey(store);
+      void forgetRememberedDevice(store);
+    }
     window.location.hash = wantsSetup || needsSetup ? "#/app" : hash;
   };
 

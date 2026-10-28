@@ -16,7 +16,7 @@ example.com {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		# SPA 只需要连自己的源；分享页要下载 blob（blob:）与内联样式。
-		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 		-Server
 	}
 	# 单文件上限 100 MiB + 信封开销（对 API 与上传生效；静态文件不受影响）
@@ -34,6 +34,8 @@ example.com {
 		}
 	}
 	handle /public/* {
+		# 分享面只返回 JSON 或附件：比 SPA 更严，禁止任何脚本/内联渲染。
+		header Content-Security-Policy "default-src 'none'; sandbox"
 		reverse_proxy 127.0.0.1:8787 {
 			transport http {
 				read_timeout 300s
@@ -63,7 +65,17 @@ example.com {
 			roll_size 50MiB
 			roll_keep 10
 		}
-		format json
+		# 分享 token / bootstrap token / 口令都在请求头里：必须从访问日志中删除，
+		# 否则 ADR 0005「token 不进日志」会被反代默认行为整体抵消。
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Cookie delete
+				request>headers>X-Share-Token delete
+				request>headers>X-Share-Passphrase delete
+			}
+		}
 	}
 }
 

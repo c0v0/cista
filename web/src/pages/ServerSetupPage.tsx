@@ -31,6 +31,9 @@ export function ServerSetupPage({
   const [busy, setBusy] = useState(false);
 
   const candidate = sameOrigin ? "" : value;
+  const insecurePlaintext =
+    /^http:\/\//i.test(candidate) &&
+    !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(candidate);
 
   const test = async () => {
     setBusy(true);
@@ -88,6 +91,11 @@ export function ServerSetupPage({
           只填 origin（可带路径前缀），例如 <code>https://cista.example.com</code> 或
           <code>https://example.com/cista</code>；不要带账号、query、fragment。
         </p>
+        {insecurePlaintext ? (
+          <p className="error" role="alert">
+            明文 http 会把分享 token、口令与签名暴露给网络中间人；请改用 https。
+          </p>
+        ) : null}
         <div className="row">
           <button type="submit" disabled={busy}>
             保存并继续
