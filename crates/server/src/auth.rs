@@ -9,9 +9,13 @@ use axum::http::{HeaderMap, Method, Uri};
 use axum::middleware::Next;
 use axum::response::Response;
 use cista_core::auth::{self, RequestMeta};
+use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
 use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
+use tokio::io::AsyncWriteExt;
 
 use crate::error::AppError;
 use crate::state::{now, AppState};
@@ -226,6 +230,193 @@ pub async fn require_signed(
     let mut request = Request::from_parts(parts, Body::from(bytes));
     request.extensions_mut().insert(device);
     Ok(next.run(request).await)
+}
+
+/// 已落盘的私有附件（中间件写入，handler 负责移动到内容寻址路径）。
+#[derive(Debug, Clone)]
+pub struct SpooledUpload {
+    pub path: PathBuf,
+    pub hash: String,
+    pub size: u64,
+}
+
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// `/api/files` 专用：流式落盘 + 摘要验签，避免 100 MiB 附件整包进内存。
+pub async fn require_signed_upload(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    let limit = usize::try_from(state.cfg.max_file_bytes).unwrap_or(usize::MAX);
+    if let Some(len) = request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.parse::<usize>().ok())
+    {
+        if len > limit {
+            return Err(AppError::PayloadTooLarge);
+        }
+    }
+    if header(request.headers(), H_DEVICE).is_none()
+        || header(request.headers(), H_NONCE).is_none()
+        || header(request.headers(), H_SIGNATURE).is_none()
+        || header(request.headers(), H_TIMESTAMP).is_none()
+    {
+        return Err(AppError::Unauthorized);
+    }
+
+    let (parts, body) = request.into_parts();
+    let now_ts = now();
+    let peer = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let client = client_ip(peer, &parts.headers, state.cfg.trust_proxy)
+        .unwrap_or_else(|| "unknown".to_string());
+    let failure_key = failure_key(&client, &parts.headers);
+    if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
+        return Err(AppError::RateLimited { retry_after_secs });
+    }
+
+    let permit = tokio::time::timeout(
+        Duration::from_secs(2),
+        state.upload_budget.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| AppError::RateLimited {
+        retry_after_secs: 1,
+    })?
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("upload budget closed")))?;
+
+    let dir = state.data_dir().join("blobs").join("private");
+    tokio::fs::create_dir_all(&dir).await?;
+    let temp = dir.join(format!(".upload-{}.tmp", crate::ids::new_id("up")));
+    let spooled = tokio::time::timeout(UPLOAD_TIMEOUT, spool_body(body, &temp, limit)).await;
+    let (size, digest) = match spooled {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            drop(permit);
+            return Err(error);
+        }
+        Err(_) => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            drop(permit);
+            return Err(AppError::RequestTimeout);
+        }
+    };
+    drop(permit);
+
+    let device = match verify_digest_headers(
+        &state,
+        &parts.headers,
+        &parts.method,
+        &parts.uri,
+        digest,
+        now_ts,
+    )
+    .await
+    {
+        Ok(device) => {
+            state.failures.clear(&failure_key);
+            device
+        }
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            if matches!(error, AppError::Unauthorized) {
+                state.failures.record(&failure_key, now_ts);
+            }
+            return Err(error);
+        }
+    };
+
+    let mut request = Request::from_parts(parts, Body::empty());
+    request.extensions_mut().insert(device);
+    request.extensions_mut().insert(SpooledUpload {
+        path: temp.clone(),
+        hash: hex::encode(digest),
+        size,
+    });
+    let response = next.run(request).await;
+    // handler 成功时会把临时文件 rename 走；失败路径由这里兜底清理。
+    let _ = tokio::fs::remove_file(&temp).await;
+    Ok(response)
+}
+
+async fn spool_body(body: Body, path: &Path, limit: usize) -> Result<(u64, [u8; 32]), AppError> {
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut hasher = Sha256::new();
+    let mut size: u64 = 0;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| AppError::BadRequest("broken_body"))?;
+        size = size.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if size > limit as u64 {
+            return Err(AppError::PayloadTooLarge);
+        }
+        hasher.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await?;
+    let digest: [u8; 32] = hasher.finalize().into();
+    Ok((size, digest))
+}
+
+async fn verify_digest_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body_sha256: [u8; 32],
+    current_time: i64,
+) -> Result<SignedDevice, AppError> {
+    let device_id = header(headers, H_DEVICE).ok_or(AppError::Unauthorized)?;
+    let nonce_hex = header(headers, H_NONCE).ok_or(AppError::Unauthorized)?;
+    let timestamp = header(headers, H_TIMESTAMP)
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let signature = header(headers, H_SIGNATURE).ok_or(AppError::Unauthorized)?;
+
+    let nonce = hex::decode(nonce_hex).map_err(|_| AppError::Unauthorized)?;
+    auth::validate_nonce(&nonce).map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(Vec<u8>,)> =
+        sqlx::query_as("SELECT pubkey FROM devices WHERE id = ? AND revoked_at IS NULL")
+            .bind(device_id)
+            .fetch_optional(state.private.pool())
+            .await?;
+    let (pubkey_bytes,) = row.ok_or(AppError::Unauthorized)?;
+    let pubkey: [u8; 32] = pubkey_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::Unauthorized)?;
+
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| uri.path());
+    let meta = RequestMeta::with_body_sha256(
+        method.as_str(),
+        path_and_query,
+        body_sha256,
+        &nonce,
+        timestamp,
+    );
+    auth::verify(&pubkey, &meta, signature, current_time).map_err(|_| AppError::Unauthorized)?;
+    let fresh = state
+        .replay
+        .lock()
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("replay cache poisoned")))?
+        .check_and_record(device_id, &nonce, current_time);
+    if !fresh {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(SignedDevice {
+        id: device_id.to_string(),
+        pubkey,
+    })
 }
 
 /// 失败计数的 key：`(peer, 声称的设备 id)`。

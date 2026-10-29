@@ -31,6 +31,8 @@ pub struct AppState {
     pub body_budget: Arc<Semaphore>,
     /// 限制并发 Argon2 校验，避免同步哈希阻塞 runtime。
     pub hash_budget: Arc<Semaphore>,
+    /// 限制同时进行的私有附件流式上传（磁盘与连接占用）。
+    pub upload_budget: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -57,6 +59,7 @@ impl AppState {
             failures: Arc::new(FailureTracker::new(5, 300)),
             body_budget: Arc::new(Semaphore::new(16)),
             hash_budget: Arc::new(Semaphore::new(4)),
+            upload_budget: Arc::new(Semaphore::new(8)),
         }
     }
 
@@ -98,6 +101,14 @@ impl EventBus {
         // 没有订阅者时 send 会失败，忽略即可。
         let _ = sender.send(rev);
     }
+
+    /// 清理没有订阅者的通道，避免长期运行时 map 只增不减。
+    pub fn retain_active(&self) {
+        self.channels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|_, sender| sender.receiver_count() > 0);
+    }
 }
 
 /// Yjs 帧广播（`/ws`）：每个工作区一个通道，载荷是完整的 y-sync 编码帧。
@@ -130,6 +141,14 @@ impl FrameBus {
             .entry(workspace_id.to_string())
             .or_insert_with(|| broadcast::channel(32).0);
         let _ = sender.send(frame);
+    }
+
+    /// 清理没有订阅者的通道。
+    pub fn retain_active(&self) {
+        self.channels
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|_, sender| sender.receiver_count() > 0);
     }
 }
 

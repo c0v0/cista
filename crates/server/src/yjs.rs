@@ -81,15 +81,82 @@ impl WorkspaceDoc {
     }
 }
 
-/// 进程内文档注册表（单实例；空闲文档可后续按需卸载）。
+/// 进程内文档注册表（单实例；空闲且无连接的文档会被回收）。
 #[derive(Default)]
 pub struct Documents {
     inner: Mutex<HashMap<String, Arc<WorkspaceDoc>>>,
+    last_used: Mutex<HashMap<String, i64>>,
+    active: Mutex<HashMap<String, usize>>,
 }
 
 impl Documents {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn touch(&self, workspace_id: &str) {
+        self.last_used
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(workspace_id.to_string(), crate::state::now());
+    }
+
+    /// WS 会话开始：标记为活跃，空闲回收会跳过它。
+    pub fn acquire(&self, workspace_id: &str) {
+        *self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(workspace_id.to_string())
+            .or_insert(0) += 1;
+        self.touch(workspace_id);
+    }
+
+    /// WS 会话结束：减计数并刷新空闲计时。
+    pub fn release(&self, workspace_id: &str) {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = active.get_mut(workspace_id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                active.remove(workspace_id);
+            }
+        }
+        drop(active);
+        self.touch(workspace_id);
+    }
+
+    /// 回收超过 `idle_secs` 未被访问且没有活跃连接的文档；返回回收数量。
+    pub fn unload_idle(&self, idle_secs: i64) -> usize {
+        let now = crate::state::now();
+        let active = self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let idle: Vec<String> = self
+            .last_used
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|(id, seen)| {
+                now.saturating_sub(**seen) >= idle_secs && !active.contains_key(*id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        drop(active);
+        for id in &idle {
+            self.unload(id);
+        }
+        let mut last_used = self
+            .last_used
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for id in &idle {
+            last_used.remove(id);
+        }
+        idle.len()
     }
 
     /// 取或从库里恢复一个工作区文档。
@@ -104,6 +171,7 @@ impl Documents {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(workspace_id)
         {
+            self.touch(workspace_id);
             return Ok(Arc::clone(existing));
         }
 
@@ -131,10 +199,13 @@ impl Documents {
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        Ok(Arc::clone(
+        let doc = Arc::clone(
             map.entry(workspace_id.to_string())
                 .or_insert_with(|| Arc::new(doc)),
-        ))
+        );
+        drop(map);
+        self.touch(workspace_id);
+        Ok(doc)
     }
 
     /// 卸载（测试/维护用：下次访问会从快照+尾部重建）。

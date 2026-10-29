@@ -35,14 +35,31 @@ async fn main() -> anyhow::Result<()> {
         "cista-server listening"
     );
 
+    let state = AppState::new(config, private, shared);
+    tokio::spawn(maintenance(state.clone()));
+
     let server = axum::serve(
         listener,
-        app(AppState::new(config, private, shared))
-            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal());
     server.await?;
     Ok(())
+}
+
+/// 后台维护：回收空闲 Yjs 文档与没有订阅者的广播通道（每分钟一次）。
+async fn maintenance(state: AppState) {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let unloaded = state.documents.unload_idle(600);
+        state.events.retain_active();
+        state.ws_events.retain_active();
+        if unloaded > 0 {
+            tracing::info!(unloaded, "idle yjs documents unloaded");
+        }
+    }
 }
 
 fn init_tracing(json: bool) {

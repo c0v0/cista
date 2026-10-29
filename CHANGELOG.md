@@ -99,3 +99,6 @@
 - 去重上传不再重复计实例配额；GC 清理超过 1 小时的 `.tmp` 残留。
 - Android：Keystore 插件校验键名白名单；CI 在生成的 manifest 上关闭 `allowBackup` 与明文流量。
 - Web：`index.html` 加 `referrer: no-referrer`。
+- 代码层补强：nonce 缓存硬上限；WS 校验 Origin；空闲 Yjs 文档与广播通道回收；
+  私有附件改为流式落盘 + 摘要验签（100 MiB 上限，不再整包进内存）；
+  Android 宿主彻底移除明文密钥读写（仅保留旧文件清理）；Keystore 键名白名单。

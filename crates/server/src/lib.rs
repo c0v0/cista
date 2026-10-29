@@ -45,7 +45,6 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/devices", get(api::devices::list))
         .route("/api/devices/{id}/revoke", post(api::devices::revoke))
-        .route("/api/files", post(api::files::upload))
         .route("/api/files/{hash}", get(api::files::download))
         .route("/api/workspaces", post(api::workspaces::create))
         .route("/api/workspaces/{id}", get(api::workspaces::get))
@@ -64,6 +63,14 @@ pub fn app(state: AppState) -> Router {
         ));
 
     let upload_limit = usize::try_from(state.cfg.max_file_bytes).unwrap_or(usize::MAX);
+
+    // 私有附件走流式中间件：大文件不整包进内存，验签用流式摘要。
+    let uploads: Router<AppState> = Router::new()
+        .route("/api/files", post(api::files::upload))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_signed_upload,
+        ));
 
     // 注意：分享 token 永远不出现在路径/查询里，只走 header（不变量 2）。
     let public: Router<AppState> = Router::new()
@@ -93,6 +100,7 @@ pub fn app(state: AppState) -> Router {
             "/api/devices/enroll",
             post(api::devices::enroll).layer(DefaultBodyLimit::max(64 * 1024)),
         )
+        .merge(uploads)
         .merge(signed)
         .merge(public)
         .fallback(api::not_found)

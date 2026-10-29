@@ -55,6 +55,23 @@ impl<'a> RequestMeta<'a> {
         }
     }
 
+    /// 已流式计算过 body 摘要时使用（避免为验签把大文件整包读进内存）。
+    pub fn with_body_sha256(
+        method: &'a str,
+        path: &'a str,
+        body_sha256: [u8; 32],
+        nonce: &'a [u8],
+        ts: i64,
+    ) -> Self {
+        Self {
+            method,
+            path,
+            body_sha256,
+            nonce,
+            ts,
+        }
+    }
+
     /// 规范串；任何字段变化都必须改变签名结果。
     pub fn canonical(&self) -> Vec<u8> {
         format!(
@@ -135,8 +152,12 @@ pub fn verify(
 #[derive(Debug)]
 pub struct ReplayCache {
     ttl_secs: i64,
+    max_entries: usize,
     seen: HashMap<String, i64>,
 }
+
+/// 缓存条目硬上限：防止被入侵的设备在 TTL 窗口内灌爆内存。
+pub const DEFAULT_MAX_NONCES: usize = 100_000;
 
 impl Default for ReplayCache {
     fn default() -> Self {
@@ -146,8 +167,13 @@ impl Default for ReplayCache {
 
 impl ReplayCache {
     pub fn new(ttl_secs: i64) -> Self {
+        Self::with_limit(ttl_secs, DEFAULT_MAX_NONCES)
+    }
+
+    pub fn with_limit(ttl_secs: i64, max_entries: usize) -> Self {
         Self {
             ttl_secs: ttl_secs.max(1),
+            max_entries: max_entries.max(1),
             seen: HashMap::new(),
         }
     }
@@ -161,6 +187,17 @@ impl ReplayCache {
         let key = format!("{device_id}:{}", hex::encode(nonce));
         if self.seen.contains_key(&key) {
             return false;
+        }
+        if self.seen.len() >= self.max_entries {
+            // 淘汰最早过期的条目；正常流量下远达不到上限。
+            if let Some(oldest) = self
+                .seen
+                .iter()
+                .min_by_key(|(_, expires_at)| **expires_at)
+                .map(|(key, _)| key.clone())
+            {
+                self.seen.remove(&oldest);
+            }
         }
         self.seen.insert(key, now.saturating_add(self.ttl_secs));
         true
@@ -323,5 +360,16 @@ mod tests {
         assert_eq!(validate_nonce(&[0u8; 16]), Ok(()));
         assert_eq!(validate_nonce(&[0u8; 32]), Ok(()));
         assert_eq!(validate_nonce(&[0u8; 33]), Err(AuthError::BadNonce));
+    }
+
+    #[test]
+    fn replay_cache_is_bounded() {
+        let mut cache = ReplayCache::with_limit(300, 2);
+        assert!(cache.check_and_record("dev", &[1], 1000));
+        assert!(cache.check_and_record("dev", &[2], 1001));
+        assert_eq!(cache.len(), 2);
+        // 达到上限后淘汰最早过期的一条，长度保持不变。
+        assert!(cache.check_and_record("dev", &[3], 1002));
+        assert_eq!(cache.len(), 2);
     }
 }

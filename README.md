@@ -24,9 +24,9 @@
 | 客户端 | Web / Linux / Windows / Android 共用一套 SPA：首次启动填服务器地址、配对、笔记编辑器、附件、本地搜索索引（内存、不落盘） |
 | 原生能力 | Tauri 2 壳 + `plugins/keystore`：桌面走 Secret Service / Credential Manager，Android 走 AndroidKeyStore；只允许存设备种子，MK 不入系统凭据库 |
 
-单文件上限：共享工作区上传 100 MiB；私有附件与 `/api/*` 共用 6 MiB 请求体上限（笔记信封同限）。
+单文件上限：共享工作区与私有附件均为 100 MiB（流式写入，不整包进内存）；笔记信封路由 6 MiB。
 
-测试规模：Rust **123 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+测试规模：Rust **125 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
 Web **96 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
 门禁 `./scripts/verify.sh`：web build → rustfmt → clippy → test → deny → web tests。
 

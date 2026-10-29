@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use cista_core::auth::{self, RequestMeta};
 use cista_core::share::{can_read_notes, can_write_notes, ShareKind};
 use futures_util::{SinkExt, StreamExt};
@@ -21,7 +22,7 @@ use crate::error::AppError;
 use crate::public::{ensure_public, load_link, load_workspace};
 use crate::state::{now, AppState};
 use crate::wire::{self, WireMessage};
-use crate::yjs::{apply_client_update, WorkspaceDoc};
+use crate::yjs::{apply_client_update, Documents, WorkspaceDoc};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 握手 JSON 上限：正常请求只有几百字节。
@@ -57,6 +58,18 @@ struct Session {
     can_write: bool,
 }
 
+/// WS 会话结束时释放活跃计数，允许文档被空闲回收。
+struct ActiveSession {
+    documents: Arc<Documents>,
+    workspace_id: String,
+}
+
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        self.documents.release(&self.workspace_id);
+    }
+}
+
 enum Outcome {
     /// 只回给当前连接（SyncStep2）。
     Reply(Vec<u8>),
@@ -66,7 +79,14 @@ enum Outcome {
     None,
 }
 
-pub async fn handler(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+pub async fn handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+    }
     // 握手消息很小；之后的 y-sync 帧仍受 `MAX_WS_MESSAGE`（= 单 update 上限）约束。
     let upgrade = upgrade
         .max_message_size(MAX_WS_MESSAGE)
@@ -78,9 +98,46 @@ pub async fn handler(State(state): State<AppState>, upgrade: WebSocketUpgrade) -
     })
 }
 
+/// 浏览器必须同源或命中 `CISTA_CORS_ORIGIN`；原生客户端通常不带 Origin。
+fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return true;
+    };
+    let origin = origin.trim_end_matches('/');
+    if let Some(configured) = state.cfg.cors_origin.as_deref() {
+        return origin.eq_ignore_ascii_case(configured.trim_end_matches('/'));
+    }
+    if origin.eq_ignore_ascii_case("tauri://localhost")
+        || origin.eq_ignore_ascii_case("http://tauri.localhost")
+        || origin.eq_ignore_ascii_case("https://tauri.localhost")
+    {
+        return true;
+    }
+    let Some(host) = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    origin
+        .strip_prefix("https://")
+        .or_else(|| origin.strip_prefix("http://"))
+        .map(|rest| rest.eq_ignore_ascii_case(host.trim()))
+        .unwrap_or(false)
+}
+
 async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppError> {
     let raw = read_handshake(&mut socket).await?;
     let session = authenticate(&state, &raw).await?;
+    // 活跃会话期间禁止空闲回收（Drop 时自动 release）。
+    state.documents.acquire(&session.workspace_id);
+    let _active = ActiveSession {
+        documents: Arc::clone(&state.documents),
+        workspace_id: session.workspace_id.clone(),
+    };
     let doc = state
         .documents
         .get_or_load(&state, &session.workspace_id)

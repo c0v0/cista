@@ -70,79 +70,35 @@ fn secret_delete(key: String) -> Result<(), String> {
     }
 }
 
-// Android：敏感键走 `plugins/keystore`（AndroidKeyStore）。这里的明文 JSON 只作为
-// 非敏感键的兜底；敏感键在插件不可用时直接报错，且读取时会清理旧版遗留条目。
+// Android：敏感键只允许走 `plugins/keystore`（AndroidKeyStore）。
+// 宿主命令不再读写任何明文文件；仅保留一次性清理旧版本遗留文件的能力。
 #[cfg(target_os = "android")]
-fn secrets_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+fn legacy_secrets_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     use tauri::Manager as _;
-    let dir = app
+    Ok(app
         .path()
         .app_data_dir()
-        .map_err(|error| error.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    Ok(dir.join("cista-secrets.json"))
-}
-
-#[cfg(target_os = "android")]
-fn read_secrets(
-    app: &tauri::AppHandle,
-) -> Result<std::collections::BTreeMap<String, String>, String> {
-    let path = secrets_path(app)?;
-    if !path.exists() {
-        return Ok(std::collections::BTreeMap::new());
-    }
-    let raw = std::fs::read(&path).map_err(|error| error.to_string())?;
-    serde_json::from_slice(&raw).map_err(|error| error.to_string())
-}
-
-#[cfg(target_os = "android")]
-fn write_secrets(
-    app: &tauri::AppHandle,
-    secrets: &std::collections::BTreeMap<String, String>,
-) -> Result<(), String> {
-    use std::io::Write as _;
-    let path = secrets_path(app)?;
-    let tmp = path.with_extension("json.tmp");
-    let mut file = std::fs::File::create(&tmp).map_err(|error| error.to_string())?;
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut perms = file.metadata().map_err(|e| e.to_string())?.permissions();
-        perms.set_mode(0o600);
-        file.set_permissions(perms).map_err(|e| e.to_string())?;
-    }
-    file.write_all(&serde_json::to_vec(secrets).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    file.flush().map_err(|error| error.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?
+        .join("cista-secrets.json"))
 }
 
 #[cfg(target_os = "android")]
 #[tauri::command]
-fn secret_save(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+fn secret_save(_app: tauri::AppHandle, key: String, _value: String) -> Result<(), String> {
     if !is_known_secret_key(&key) {
         return Err("unknown secret key".to_string());
     }
-    // 敏感键必须由 AndroidKeyStore 插件处理；插件失败时绝不落明文。
-    if is_sensitive_key(&key) {
-        return Err("sensitive keys require AndroidKeyStore".to_string());
-    }
-    let mut secrets = read_secrets(&app)?;
-    secrets.insert(key, value);
-    write_secrets(&app, &secrets)
+    Err("sensitive keys require AndroidKeyStore".to_string())
 }
 
 #[cfg(target_os = "android")]
 #[tauri::command]
-fn secret_load(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
+fn secret_load(_app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
     if !is_known_secret_key(&key) {
         return Err("unknown secret key".to_string());
     }
-    if is_sensitive_key(&key) {
-        // 旧版本可能留下明文条目：读之前先清掉，且永远不返回明文。
-        purge_sensitive(&app)?;
-        return Ok(None);
-    }
-    Ok(read_secrets(&app)?.get(&key).cloned())
+    // 旧版本可能把密钥写进明文 JSON：读请求顺手清理，且永远不返回明文。
+    Ok(None)
 }
 
 #[cfg(target_os = "android")]
@@ -151,32 +107,9 @@ fn secret_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
     if !is_known_secret_key(&key) {
         return Err("unknown secret key".to_string());
     }
-    let mut secrets = read_secrets(&app)?;
-    let mut changed = secrets.remove(&key).is_some();
-    if is_sensitive_key(&key) {
-        let before = secrets.len();
-        secrets.retain(|candidate, _| !is_sensitive_key(candidate));
-        changed |= secrets.len() != before;
-    }
-    if changed {
-        write_secrets(&app, &secrets)?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "android")]
-fn is_sensitive_key(key: &str) -> bool {
-    key == "master-key" || key.starts_with("device-seed:")
-}
-
-/// 删除历史版本可能写入的敏感条目（明文 JSON 文件）。
-#[cfg(target_os = "android")]
-fn purge_sensitive(app: &tauri::AppHandle) -> Result<(), String> {
-    let mut secrets = read_secrets(app)?;
-    let before = secrets.len();
-    secrets.retain(|key, _| !is_sensitive_key(key));
-    if secrets.len() != before {
-        write_secrets(app, &secrets)?;
+    // 删除同时清掉历史明文文件（幂等）。
+    if let Ok(path) = legacy_secrets_path(&app) {
+        let _ = std::fs::remove_file(path);
     }
     Ok(())
 }
@@ -184,7 +117,12 @@ fn purge_sensitive(app: &tauri::AppHandle) -> Result<(), String> {
 #[cfg(target_os = "android")]
 #[tauri::command]
 fn purge_legacy_secrets(app: tauri::AppHandle) -> Result<(), String> {
-    purge_sensitive(&app)
+    let path = legacy_secrets_path(&app)?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[cfg(not(target_os = "android"))]
