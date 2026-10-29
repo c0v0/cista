@@ -57,11 +57,15 @@ Web 端默认同源、也可改成跨域地址：
 
 ## 部署与运维
 
-- systemd 安装（按顺序执行，目录/环境文件缺失会导致 unit 直接启动失败）：
+- systemd 安装（按顺序执行，目录/环境文件/二进制缺失都会导致 unit 启动失败）：
   ```bash
+  sudo apt-get install -y sqlite3 restic curl
+  cargo build --release -p cista-server
+  sudo install -m 755 target/release/cista-server /usr/local/bin/cista-server
   sudo useradd --system --home /srv/cista --shell /usr/sbin/nologin cista
   sudo install -d -o cista -g cista /srv/cista/data /srv/cista/backup
-  sudo install -d /srv/cista/scripts && sudo cp scripts/*.sh /srv/cista/scripts/
+  sudo install -d /etc/cista /srv/cista/scripts
+  sudo cp scripts/*.sh /srv/cista/scripts/ && sudo chmod +x /srv/cista/scripts/*.sh
   sudo install -m 600 -o cista -g cista deploy/cista.env.example /etc/cista/cista.env
   sudo install -m 600 -o cista -g cista deploy/backup.env.example /etc/cista/backup.env
   # 编辑两个 env：填 CISTA_STATIC_KEY / BOOTSTRAP / RESTIC_*
@@ -69,6 +73,7 @@ Web 端默认同源、也可改成跨域地址：
           deploy/cista-backup.service deploy/cista-backup.timer /etc/systemd/system/
   sudo systemctl daemon-reload && sudo systemctl enable --now cista cista-gc.timer cista-backup.timer
   ```
+- **不要把 8787 直接发布到公网**：只允许 Caddy 从 `127.0.0.1` 反代；直接暴露会绕过 TLS 与反代头信任边界。
 - 默认形态：单二进制 + systemd（`deploy/cista.service`）。Docker 也支持：
   `cp .env.example .env` → `docker compose up -d --build`
   （镜像见 `Dockerfile`，容器以 uid 10001 运行；compose 的 `init-data` 会先把 `./data` 属主改成 10001）。

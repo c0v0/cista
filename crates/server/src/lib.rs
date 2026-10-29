@@ -180,6 +180,8 @@ fn cors_layer(origin: &str) -> Option<CorsLayer> {
                 header::IF_MATCH,
                 HeaderName::from_static("idempotency-key"),
                 HeaderName::from_static("x-share-passphrase"),
+                HeaderName::from_static("x-share-ticket"),
+                HeaderName::from_static("x-share-token"),
                 HeaderName::from_static("x-file-name"),
                 HeaderName::from_static("x-device-id"),
                 HeaderName::from_static("x-nonce"),

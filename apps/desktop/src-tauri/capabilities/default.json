@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "cista 主窗口：只授予 core 默认权限；业务命令由 Rust 侧白名单校验键名。",
+  "description": "cista 主窗口：core 默认权限 + AndroidKeystore 插件（键名仍由 Rust/Kotlin 白名单校验）。",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "cista-keystore:default"]
 }

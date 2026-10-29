@@ -107,3 +107,9 @@
 - WS 广播队列降到 16，慢客户端落后即断开重连（避免内存堆积）。
 - 新增 Tauri `capabilities/default.json`（core:default）；Web 生产构建注入 CSP meta；
   Caddy CSP 允许 `https:`/`wss:` 以支持运行期填写的跨域服务器地址。
+- CORS 预检放行 `X-Share-Ticket`/`X-Share-Token`，跨域单文件下载恢复。
+- Android Keystore 链路打通：注册 `register_android_plugin`、新增插件 `permissions/default.toml`、
+  capability 授予 `cista-keystore:default`、Kotlin 命令改为 Tauri 派发使用的 camelCase。
+- 私有附件下载改为分块流式；Caddy 版本要求改为 >=2.10（`request_body`）。
+- Docker 镜像不再默认信任反代头（仅 compose 的 127.0.0.1 映射开启）；备份 unit 设 `HOME=/srv/cista`
+  并给出可执行的 ssh 密钥放置方式；README 安装步骤补全二进制/依赖/`/etc/cista`。

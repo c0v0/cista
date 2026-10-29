@@ -27,6 +27,8 @@ services:
       # 容器内必须绑 0.0.0.0 才能被端口映射访问
       CISTA_BIND: 0.0.0.0:8787
       CISTA_DATA_DIR: /data
+      # 只有 compose 的 127.0.0.1 端口映射后采信反代头；直接 docker run 默认不信任。
+      CISTA_TRUST_PROXY: "1"
     ports:
       - "127.0.0.1:8787:8787"
     volumes:

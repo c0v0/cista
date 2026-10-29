@@ -1,4 +1,4 @@
-# cista 反代配置（Caddy 2，建议 >= 2.7：日志字段过滤需要 format filter）
+# cista 反代配置（Caddy 2，要求 >= 2.10：request_body 指令；format filter 需 >= 2.5）
 #
 # 职责：TLS/HSTS、请求体上限、静态 SPA、API/WS 反代、访问日志。
 # 分享 token 只在 `Authorization: Share` 头里，因此 URI 不含长期凭据；

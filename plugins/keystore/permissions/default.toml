@@ -1,0 +1,4 @@
+# cista-keystore 默认权限：只暴露设备种子与 MK 的存取命令。
+[default]
+description = "Allow reading/writing the device seed and master key via AndroidKeyStore"
+permissions = ["allow-secret-save", "allow-secret-load", "allow-secret-delete"]

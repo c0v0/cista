@@ -107,17 +107,29 @@ pub async fn download(
     if known.is_none() {
         return Err(AppError::NotFound);
     }
-    let bytes = tokio::fs::read(state.data_dir().join("blobs").join("private").join(&hash))
+    let file = tokio::fs::File::open(state.data_dir().join("blobs").join("private").join(&hash))
         .await
         .map_err(|_| AppError::NotFound)?;
     use axum::response::IntoResponse;
+    use tokio::io::AsyncReadExt;
+    let stream = futures_util::stream::unfold(file, |mut file| async move {
+        let mut buffer = vec![0u8; 256 * 1024];
+        match file.read(&mut buffer).await {
+            Ok(0) => None,
+            Ok(read) => {
+                buffer.truncate(read);
+                Some((Ok::<_, std::io::Error>(buffer), file))
+            }
+            Err(error) => Some((Err(error), file)),
+        }
+    });
     Ok((
         StatusCode::OK,
         [
             (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
             (axum::http::header::CONTENT_DISPOSITION, "attachment"),
         ],
-        bytes,
+        axum::body::Body::from_stream(stream),
     )
         .into_response())
 }

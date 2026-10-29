@@ -58,7 +58,7 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
-  fun secret_save(invoke: Invoke) {
+  fun secretSave(invoke: Invoke) {
     val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
     if (!isValidKey(key)) return invoke.reject("unknown secret key")
     val value = invoke.getArgs().getString("value") ?: return invoke.reject("missing value")
@@ -67,7 +67,7 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
-  fun secret_load(invoke: Invoke) {
+  fun secretLoad(invoke: Invoke) {
     val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
     if (!isValidKey(key)) return invoke.reject("unknown secret key")
     val result = prefs.getString(key, null)?.let { decrypt(it) }
@@ -77,7 +77,7 @@ class KeystorePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
-  fun secret_delete(invoke: Invoke) {
+  fun secretDelete(invoke: Invoke) {
     val key = invoke.getArgs().getString("key") ?: return invoke.reject("missing key")
     if (!isValidKey(key)) return invoke.reject("unknown secret key")
     prefs.edit().remove(key).apply()
