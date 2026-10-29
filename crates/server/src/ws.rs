@@ -190,7 +190,8 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    // 慢客户端落后超过队列容量：断开让它重连并重新同步，避免无限堆积。
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }

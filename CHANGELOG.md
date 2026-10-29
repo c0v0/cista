@@ -102,3 +102,8 @@
 - 代码层补强：nonce 缓存硬上限；WS 校验 Origin；空闲 Yjs 文档与广播通道回收；
   私有附件改为流式落盘 + 摘要验签（100 MiB 上限，不再整包进内存）；
   Android 宿主彻底移除明文密钥读写（仅保留旧文件清理）；Keystore 键名白名单。
+- 下载票据改走 `X-Share-Ticket` 头（URL/日志不再出现票据）；Caddy 日志同步剔除该头。
+- 签名失败退避只按客户端地址计数，未验签的设备 id 不再能用来锁死他人设备。
+- WS 广播队列降到 16，慢客户端落后即断开重连（避免内存堆积）。
+- 新增 Tauri `capabilities/default.json`（core:default）；Web 生产构建注入 CSP meta；
+  Caddy CSP 允许 `https:`/`wss:` 以支持运行期填写的跨域服务器地址。

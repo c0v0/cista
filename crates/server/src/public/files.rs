@@ -1,14 +1,13 @@
-//! 单文件链接：两步下载（落地页不计数 → confirm 原子消费 → 票据下载）。
+//! 单文件链接：两步下载（confirm 签发一次性票据 → 凭票据下载成功时消费次数）。
 //!
 //! token 走 `Authorization: Share <token>` 头，不在 URL 里。
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
 use cista_core::protocol::{ConfirmResponse, PublicMeta};
 use cista_core::share::{hash_token, token_fingerprint, ShareKind};
-use serde::Deserialize;
 
 use crate::error::AppError;
 use crate::public::{load_link, load_link_for_ticket, require_passphrase, serve_blob, ShareToken};
@@ -87,26 +86,26 @@ pub async fn confirm(
     Ok(Json(ConfirmResponse { ticket, expires_at }))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TicketQuery {
-    pub ticket: String,
-}
-
-/// `GET /public/files/blob?ticket=...`
+/// `GET /public/files/blob`（票据走 `X-Share-Ticket` 头，不进 URL/日志）
 ///
-/// 注意：这里用 `load_link_for_ticket`——`confirm` 已经消费了唯一一次使用，
-/// 若再用「次数用尽」判定，合法的票据下载会被 410 拦住。
+/// 注意：这里用 `load_link_for_ticket`——confirm 不再消费次数，次数在下载成功时消费。
 pub async fn blob(
     State(state): State<AppState>,
     ShareToken(token): ShareToken,
-    Query(query): Query<TicketQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
+    let ticket = headers
+        .get("x-share-ticket")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(AppError::Unauthorized)?;
     let link = load_link_for_ticket(&state, &token, ShareKind::File).await?;
 
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT link_id, expires_at, blob_hash FROM blob_tickets WHERE ticket_hash = ?",
     )
-    .bind(hash_token(&query.ticket))
+    .bind(hash_token(ticket))
     .fetch_optional(state.shared.pool())
     .await?;
     let (ticket_link, ticket_expires, blob_hash) = row.ok_or(AppError::Unauthorized)?;
@@ -118,7 +117,7 @@ pub async fn blob(
     }
     // 票据单次使用：并发下载只有一个请求能删掉这一行。
     let consumed = sqlx::query("DELETE FROM blob_tickets WHERE ticket_hash = ? AND expires_at > ?")
-        .bind(hash_token(&query.ticket))
+        .bind(hash_token(ticket))
         .bind(now())
         .execute(state.shared.pool())
         .await?

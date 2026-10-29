@@ -134,7 +134,7 @@ describe("ShareClient", () => {
     expect(await blob.text()).toBe("abc");
   });
 
-  it("票据只出现在 blob 请求的 query 里", async () => {
+  it("票据只出现在 blob 请求的 header 里", async () => {
     const { transport, calls } = recordingTransport(
       () => new Response("data", { status: 200 }),
     );
@@ -142,8 +142,11 @@ describe("ShareClient", () => {
     const blob = await client.downloadTicket("ticket abc");
     expect(await blob.text()).toBe("data");
     const call = calls[0];
-    expect(call?.url).toBe("/public/files/blob?ticket=ticket%20abc");
+    expect(call?.url).toBe("/public/files/blob");
+    const headers = new Headers(call?.init.headers);
+    expect(headers.get("x-share-ticket")).toBe("ticket abc");
     expect(call?.url.includes(TOKEN)).toBe(false);
+    expect(call?.url.includes("ticket")).toBe(false);
   });
 
   it("按 next_offset 拉完所有页后停止", async () => {

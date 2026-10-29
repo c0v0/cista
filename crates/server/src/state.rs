@@ -128,7 +128,7 @@ impl FrameBus {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         channels
             .entry(workspace_id.to_string())
-            .or_insert_with(|| broadcast::channel(32).0)
+            .or_insert_with(|| broadcast::channel(16).0)
             .subscribe()
     }
 
@@ -139,7 +139,7 @@ impl FrameBus {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let sender = channels
             .entry(workspace_id.to_string())
-            .or_insert_with(|| broadcast::channel(32).0);
+            .or_insert_with(|| broadcast::channel(16).0);
         let _ = sender.send(frame);
     }
 

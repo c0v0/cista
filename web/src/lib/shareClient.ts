@@ -217,11 +217,11 @@ export class ShareClient {
     return parseConfirm(await response.json());
   }
 
-  /** 单文件链接：凭票据流式下载（票据 45s、单对象、确认后窗口内可重试）。 */
+  /** 单文件链接：凭票据流式下载（票据 45s、单次使用；票据只走 header，不进 URL）。 */
   async downloadTicket(ticket: string): Promise<Blob> {
-    const response = await this.request(
-      `/public/files/blob?ticket=${encodeURIComponent(ticket)}`,
-    );
+    const response = await this.request("/public/files/blob", {
+      headers: { "x-share-ticket": ticket },
+    });
     return await response.blob();
   }
 

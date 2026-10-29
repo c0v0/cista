@@ -2,7 +2,7 @@
 #
 # 职责：TLS/HSTS、请求体上限、静态 SPA、API/WS 反代、访问日志。
 # 分享 token 只在 `Authorization: Share` 头里，因此 URI 不含长期凭据；
-# 单文件下载票据（45s、单次使用）在 query 里；访问日志已用 format filter 删除凭据头。
+# 单文件下载票据走 `X-Share-Ticket` 头（45s、单次使用，不进 URL）；访问日志已用 format filter 删除凭据头。
 #
 # 部署：把 example.com 换成真实域名；把 /var/www/cista 换成 `web/dist` 的路径；
 # 后端默认 127.0.0.1:8787（CISTA_BIND）。这样同一个域名同时提供 SPA 与 API，
@@ -15,7 +15,7 @@ example.com {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		# SPA 只需要连自己的源；分享页要下载 blob（blob:）与内联样式。
-		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 		-Server
 	}
 	# 单文件上限 100 MiB + 信封开销（对 API 与上传生效；静态文件不受影响）
@@ -80,6 +80,7 @@ example.com {
 				request>headers>Cookie delete
 				request>headers>X-Share-Token delete
 				request>headers>X-Share-Passphrase delete
+				request>headers>X-Share-Ticket delete
 			}
 		}
 	}

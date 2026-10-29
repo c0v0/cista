@@ -202,7 +202,7 @@ pub async fn require_signed(
         .map(|info| info.0.ip());
     let client = client_ip(peer, &parts.headers, state.cfg.trust_proxy)
         .unwrap_or_else(|| "unknown".to_string());
-    let failure_key = failure_key(&client, &parts.headers);
+    let failure_key = failure_key(&client);
     if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
         return Err(AppError::RateLimited { retry_after_secs });
     }
@@ -275,7 +275,7 @@ pub async fn require_signed_upload(
         .map(|info| info.0.ip());
     let client = client_ip(peer, &parts.headers, state.cfg.trust_proxy)
         .unwrap_or_else(|| "unknown".to_string());
-    let failure_key = failure_key(&client, &parts.headers);
+    let failure_key = failure_key(&client);
     if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
         return Err(AppError::RateLimited { retry_after_secs });
     }
@@ -419,15 +419,10 @@ async fn verify_digest_headers(
     })
 }
 
-/// 失败计数的 key：`(peer, 声称的设备 id)`。
+/// 失败计数的 key：只按客户端地址。
 ///
-/// 只看 `x-device-id` 会让知道某个设备 id 的人用伪造请求把该设备锁死；
-/// 加上对端地址后，攻击者只能锁住自己。
-fn failure_key(peer: &str, headers: &HeaderMap) -> String {
-    let claimed = headers
-        .get(H_DEVICE)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
-        .unwrap_or("anonymous");
-    format!("{peer}:{claimed}")
+/// 不把未验签的 `x-device-id` 放进键里：否则知道受害者出口 IP 与设备 id 的人
+/// 可以持续伪造失败请求，把该设备锁死。按 IP 计数只会锁住攻击者自己。
+fn failure_key(client: &str) -> String {
+    format!("auth:{client}")
 }

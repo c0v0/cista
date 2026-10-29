@@ -243,8 +243,15 @@ async fn single_file_link_is_two_step_and_capped_to_one_use() {
     assert_eq!(status, StatusCode::OK);
     let confirm: ConfirmResponse = TestApp::json(&body);
 
-    let uri = format!("/public/files/blob?ticket={}", confirm.ticket);
-    let (status, downloaded) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
+    let (status, downloaded) = app
+        .send(app.public(
+            "GET",
+            "/public/files/blob",
+            &token,
+            b"",
+            &[("x-share-ticket", confirm.ticket.as_str())],
+        ))
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(downloaded.as_slice(), b"secret-bytes");
 
@@ -284,17 +291,17 @@ async fn concurrent_downloads_consume_exactly_once() {
 
     let first = app.public(
         "GET",
-        &format!("/public/files/blob?ticket={}", tickets[0]),
+        "/public/files/blob",
         &token,
         b"",
-        &[],
+        &[("x-share-ticket", tickets[0].as_str())],
     );
     let second = app.public(
         "GET",
-        &format!("/public/files/blob?ticket={}", tickets[1]),
+        "/public/files/blob",
         &token,
         b"",
-        &[],
+        &[("x-share-ticket", tickets[1].as_str())],
     );
     let (a, b) = tokio::join!(app.send(first), app.send(second));
     let successes = [a.0, b.0]
@@ -670,14 +677,29 @@ async fn ticket_is_single_use() {
         .await;
     assert_eq!(status, StatusCode::OK);
     let confirm: ConfirmResponse = TestApp::json(&body);
-    let uri = format!("/public/files/blob?ticket={}", confirm.ticket);
 
-    let (status, downloaded) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
+    let (status, downloaded) = app
+        .send(app.public(
+            "GET",
+            "/public/files/blob",
+            &token,
+            b"",
+            &[("x-share-ticket", confirm.ticket.as_str())],
+        ))
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(downloaded, b"retry-bytes");
 
     // 同一票据第二次必须被拒绝；需要重试时重新 confirm 换新票据。
-    let (status, _) = app.send(app.public("GET", &uri, &token, b"", &[])).await;
+    let (status, _) = app
+        .send(app.public(
+            "GET",
+            "/public/files/blob",
+            &token,
+            b"",
+            &[("x-share-ticket", confirm.ticket.as_str())],
+        ))
+        .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
