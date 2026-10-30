@@ -532,19 +532,28 @@ pub async fn events(
     let workspace = load_workspace(&state, &link.object_id).await?;
     ensure_public(&workspace)?;
 
+    let permit =
+        state
+            .sse_budget
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| AppError::RateLimited {
+                retry_after_secs: 1,
+            })?;
     let receiver = state.events.subscribe(&link.object_id);
-    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
-        loop {
-            match receiver.recv().await {
-                Ok(rev) => {
-                    let event = Event::default().event("rev").data(rev.to_string());
-                    return Some((Ok(event), receiver));
+    let stream =
+        futures_util::stream::unfold((receiver, permit), |(mut receiver, permit)| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(rev) => {
+                        let event = Event::default().event("rev").data(rev.to_string());
+                        return Some((Ok(event), (receiver, permit)));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
             }
-        }
-    });
+        });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }

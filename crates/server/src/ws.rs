@@ -56,6 +56,8 @@ struct Handshake {
 struct Session {
     workspace_id: String,
     can_write: bool,
+    frames: u32,
+    window_start: i64,
 }
 
 /// WS 会话结束时释放活跃计数，允许文档被空闲回收。
@@ -87,11 +89,19 @@ pub async fn handler(
     if !origin_allowed(&state, &headers) {
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
+    let Ok(permit) = state.ws_budget.clone().try_acquire_owned() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many websocket connections",
+        )
+            .into_response();
+    };
     // 握手消息很小；之后的 y-sync 帧仍受 `MAX_WS_MESSAGE`（= 单 update 上限）约束。
     let upgrade = upgrade
         .max_message_size(MAX_WS_MESSAGE)
         .max_frame_size(MAX_WS_MESSAGE);
     upgrade.on_upgrade(move |socket| async move {
+        let _permit = permit;
         if let Err(error) = run_session(state, socket).await {
             tracing::info!(error = ?error, "ws session closed");
         }
@@ -131,7 +141,7 @@ fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
 
 async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppError> {
     let raw = read_handshake(&mut socket).await?;
-    let session = authenticate(&state, &raw).await?;
+    let mut session = authenticate(&state, &raw).await?;
     // 活跃会话期间禁止空闲回收（Drop 时自动 release）。
     state.documents.acquire(&session.workspace_id);
     let _active = ActiveSession {
@@ -161,6 +171,16 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(WsMessage::Binary(bytes))) => {
+                        // 每连接限速：每分钟 240 帧，超出直接断开。
+                        let now_ts = now();
+                        if now_ts.saturating_sub(session.window_start) >= 60 {
+                            session.window_start = now_ts;
+                            session.frames = 0;
+                        }
+                        session.frames = session.frames.saturating_add(1);
+                        if session.frames > 240 {
+                            break;
+                        }
                         match handle_frame(&state, &doc, &session, &bytes).await? {
                             Outcome::Reply(frame) => {
                                 if sink.send(WsMessage::Binary(frame.into())).await.is_err() {
@@ -198,9 +218,11 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
         }
     }
 
-    // 断开时把未快照的尾部合并进快照，避免尾部无限增长。
-    if let Err(error) = crate::yjs::snapshot(&state, &doc).await {
-        tracing::warn!(workspace = %session.workspace_id, error = ?error, "ws snapshot on close failed");
+    // 只在有未快照的 update 时合并；否则每次断开都写整份文档会被重连风暴放大。
+    if doc.has_pending_updates() {
+        if let Err(error) = crate::yjs::snapshot(&state, &doc).await {
+            tracing::warn!(workspace = %session.workspace_id, error = ?error, "ws snapshot on close failed");
+        }
     }
     Ok(())
 }
@@ -251,6 +273,8 @@ async fn authenticate(state: &AppState, raw: &[u8]) -> Result<Session, AppError>
             Ok(Session {
                 workspace_id: link.object_id,
                 can_write: can_write_notes(link.note_scopes),
+                frames: 0,
+                window_start: now(),
             })
         }
         "owner" => {
@@ -289,6 +313,8 @@ async fn authenticate(state: &AppState, raw: &[u8]) -> Result<Session, AppError>
             Ok(Session {
                 workspace_id: handshake.object,
                 can_write: true,
+                frames: 0,
+                window_start: now(),
             })
         }
         _ => Err(AppError::Unauthorized),

@@ -38,7 +38,44 @@ pub async fn run(cfg: &Config) -> anyhow::Result<GcReport> {
         cfg.data_dir.join("blobs").join("shared"),
     )
     .await?;
-    run_on(&shared).await
+    let report = run_on(&shared).await?;
+    // 私有上传的临时文件没有数据库行，单独按 mtime 清理。
+    cleanup_private_temps(&cfg.data_dir).await?;
+    Ok(report)
+}
+
+async fn cleanup_private_temps(data_dir: &std::path::Path) -> anyhow::Result<()> {
+    let dir = data_dir.join("blobs").join("private");
+    let mut entries = match tokio::fs::read_dir(&dir).await {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    let mut removed = 0u64;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(".upload-") || !name.ends_with(".tmp") {
+            continue;
+        }
+        let metadata = entry.metadata().await?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let old = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .map(|elapsed| elapsed.as_secs() >= 3600)
+            .unwrap_or(false);
+        if old {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, "gc removed stale private upload temp files");
+    }
+    Ok(())
 }
 
 /// 在已打开的共享库上回收（测试直接调用）。

@@ -280,6 +280,13 @@ pub async fn require_signed_upload(
         return Err(AppError::RateLimited { retry_after_secs });
     }
 
+    // 与共享上传一致：低于水位直接拒绝，避免私有目录被写满。
+    if let Some(free) = crate::state::free_bytes(state.data_dir()) {
+        if free < state.cfg.min_free_bytes.max(state.cfg.max_file_bytes) {
+            return Err(AppError::InsufficientStorage);
+        }
+    }
+
     let permit = tokio::time::timeout(
         Duration::from_secs(2),
         state.upload_budget.clone().acquire_owned(),
@@ -321,6 +328,13 @@ pub async fn require_signed_upload(
     {
         Ok(device) => {
             state.failures.clear(&failure_key);
+            // 与普通签名请求一致：验签后按设备限速。
+            state
+                .rate
+                .check(&format!("dev:{}", device.id), now_ts)
+                .map_err(|limited| AppError::RateLimited {
+                    retry_after_secs: limited.retry_after_secs,
+                })?;
             device
         }
         Err(error) => {

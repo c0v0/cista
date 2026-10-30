@@ -33,6 +33,10 @@ pub struct AppState {
     pub hash_budget: Arc<Semaphore>,
     /// 限制同时进行的私有附件流式上传（磁盘与连接占用）。
     pub upload_budget: Arc<Semaphore>,
+    /// 限制同时活跃的 `/ws` 连接。
+    pub ws_budget: Arc<Semaphore>,
+    /// 限制同时活跃的 SSE 连接。
+    pub sse_budget: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -60,6 +64,8 @@ impl AppState {
             body_budget: Arc::new(Semaphore::new(16)),
             hash_budget: Arc::new(Semaphore::new(4)),
             upload_budget: Arc::new(Semaphore::new(8)),
+            ws_budget: Arc::new(Semaphore::new(128)),
+            sse_budget: Arc::new(Semaphore::new(64)),
         }
     }
 

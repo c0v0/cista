@@ -30,6 +30,7 @@ pub struct WorkspaceDoc {
     text: yrs::TextRef,
     updates_since_snapshot: Mutex<u64>,
     oversize: Mutex<bool>,
+    approx_bytes: Mutex<usize>,
 }
 
 impl WorkspaceDoc {
@@ -42,6 +43,7 @@ impl WorkspaceDoc {
             text,
             updates_since_snapshot: Mutex::new(0),
             oversize: Mutex::new(false),
+            approx_bytes: Mutex::new(0),
         }
     }
 
@@ -70,7 +72,41 @@ impl WorkspaceDoc {
         let mut txn = self.doc.transact_mut();
         txn.apply_update(update)
             .map_err(|_| AppError::BadRequest("invalid_update"))?;
+        drop(txn);
+        *self
+            .approx_bytes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) += bytes.len();
         Ok(())
+    }
+
+    fn approx_bytes(&self) -> usize {
+        *self
+            .approx_bytes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn add_approx_bytes(&self, bytes: usize) {
+        *self
+            .approx_bytes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) += bytes;
+    }
+
+    fn reset_approx_bytes(&self, bytes: usize) {
+        *self
+            .approx_bytes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = bytes;
+    }
+
+    pub fn has_pending_updates(&self) -> bool {
+        *self
+            .updates_since_snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            > 0
     }
 
     fn is_oversize(&self) -> bool {
@@ -145,7 +181,7 @@ impl Documents {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        drop(active);
+        // 全程持有 active 锁：新会话无法在「判定空闲」与「真正卸载」之间拿到旧文档。
         for id in &idle {
             self.unload(id);
         }
@@ -156,6 +192,7 @@ impl Documents {
         for id in &idle {
             last_used.remove(id);
         }
+        drop(active);
         idle.len()
     }
 
@@ -237,7 +274,7 @@ pub async fn apply_client_update(
         // 只读：丢弃（不报错，避免把只读状态探测成信号）。
         return Ok(None);
     }
-    if doc.is_oversize() {
+    if doc.is_oversize() || doc.approx_bytes().saturating_add(bytes.len()) > MAX_DOC_BYTES {
         return Err(AppError::PayloadTooLarge);
     }
 
@@ -248,6 +285,7 @@ pub async fn apply_client_update(
         txn.apply_update(update)
             .map_err(|_| AppError::BadRequest("invalid_update"))?;
     }
+    doc.add_approx_bytes(bytes.len());
 
     // 落库失败时内存已应用该 update；客户端重试会幂等地再次应用并落库。
     sqlx::query("INSERT INTO doc_updates (workspace_id, \"update\", created_at) VALUES (?, ?, ?)")
@@ -274,6 +312,14 @@ pub async fn apply_client_update(
 
 /// 生成快照并清理已合并的尾部（同一事务，避免「快照没写却删了尾部」）。
 pub async fn snapshot(state: &AppState, doc: &WorkspaceDoc) -> Result<(), AppError> {
+    // 先读 max(seq)，再编码内存状态：这样快照状态一定覆盖被删除的尾部。
+    // 反过来（先编码后读 seq）会把「编码之后、读 seq 之前」的并发 update 删掉但未写入快照。
+    let max_seq: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM doc_updates WHERE workspace_id = ?")
+            .bind(&doc.workspace_id)
+            .fetch_one(state.shared.pool())
+            .await?;
+
     let (state_bytes, state_vector) = {
         let txn = doc.doc.transact();
         (
@@ -293,12 +339,6 @@ pub async fn snapshot(state: &AppState, doc: &WorkspaceDoc) -> Result<(), AppErr
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
     }
-
-    let max_seq: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM doc_updates WHERE workspace_id = ?")
-            .bind(&doc.workspace_id)
-            .fetch_one(state.shared.pool())
-            .await?;
 
     let mut tx = state.shared.pool().begin().await?;
     sqlx::query(
@@ -326,6 +366,7 @@ pub async fn snapshot(state: &AppState, doc: &WorkspaceDoc) -> Result<(), AppErr
     *doc.updates_since_snapshot
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = 0;
+    doc.reset_approx_bytes(state_bytes.len());
     Ok(())
 }
 
