@@ -1,0 +1,27 @@
+[package]
+name = "cista-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "cista desktop client (Tauri 2, reuses web/)"
+
+[lib]
+name = "cista_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "cista-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+cista-core = { workspace = true }
+tauri-plugin-cista-keystore = { path = "../../../plugins/keystore" }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

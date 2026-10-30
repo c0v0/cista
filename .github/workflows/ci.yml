@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      # 桌面壳（Tauri）在 Linux 上需要 GTK/WebKit 开发包，否则 clippy/test 失败。
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev pkg-config libssl-dev
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        with:
+          tool: cargo-deny
+      - name: verify
+        shell: bash
+        run: |
+          set +e
+          bash scripts/verify.sh > "$RUNNER_TEMP/verify.log" 2>&1
+          code=$?
+          tail -80 "$RUNNER_TEMP/verify.log"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::verify failed: $(tail -12 "$RUNNER_TEMP/verify.log" | tr '\n' ' ')"
+            exit "$code"
+          fi
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        with:
+          tool: cargo-deny
+      - name: verify
+        shell: bash
+        run: |
+          set +e
+          bash scripts/verify.sh > "$RUNNER_TEMP/verify.log" 2>&1
+          code=$?
+          tail -80 "$RUNNER_TEMP/verify.log"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::verify failed: $(tail -12 "$RUNNER_TEMP/verify.log" | tr '\n' ' ')"
+            exit "$code"
+          fi
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build server image
+        run: |
+          if ! docker build --progress=plain -t cista:ci . > /tmp/build.log 2>&1; then
+            echo "::error::docker build 失败: $(tail -15 /tmp/build.log | tr '\n' ' ')"
+            tail -80 /tmp/build.log
+            exit 1
+          fi
+          tail -5 /tmp/build.log
+      - name: Smoke test /healthz
+        run: |
+          docker run -d --name cista-ci \
+            -e CISTA_BOOTSTRAP_TOKEN=ci-bootstrap-token \
+            -e CISTA_STATIC_KEY="$(printf 'ab%.0s' $(seq 1 32))" \
+            -p 8787:8787 cista:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz; then echo " healthz ok"; ok=1; break; fi
+            sleep 1
+          done
+          docker logs cista-ci | tail -5
+          docker rm -f cista-ci
+          [ "$ok" = 1 ]

@@ -1,0 +1,34 @@
+[Unit]
+Description=cista daily backup
+Documentation=file:/srv/cista/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cista
+Group=cista
+EnvironmentFile=/etc/cista/backup.env
+# WAL 活库需要可写 -shm 才能被 sqlite3 读取；备份进程与服务同用户，权限面不变。
+ExecStartPre=/usr/local/bin/cista-server gc
+ExecStart=/srv/cista/scripts/backup.sh
+# 失败写 journal（stderr）并以非零退出，systemd 记录 failed unit
+StandardError=journal
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# ProtectHome=true 会隐藏 /home/cista；restic 默认缓存放 $HOME/.cache，必须改到备份目录。
+Environment=RESTIC_CACHE_DIR=/srv/cista/backup/restic-cache
+# ProtectHome=true 会隐藏 /home；把 restic 的 ssh 密钥放到 /srv/cista/.ssh，并把 HOME 指过去。
+Environment=HOME=/srv/cista
+
+# 快照里有分享 token 哈希、口令哈希和可能未加密的共享 blob：权限必须与主服务一致。
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/srv/cista/backup /srv/cista/data

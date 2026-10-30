@@ -1,0 +1,183 @@
+:root {
+  color-scheme: light dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    "Noto Sans SC",
+    sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+}
+
+main {
+  box-sizing: border-box;
+  width: min(680px, 100%);
+  padding: 2rem 1.25rem 4rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 1rem;
+}
+
+p,
+li,
+label {
+  margin: 0.5rem 0;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+input[type="password"] {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  margin-right: 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.files {
+  list-style: none;
+  padding: 0;
+}
+
+.files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgb(128 128 128 / 0.25);
+}
+
+.error {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+}
+
+.upload {
+  display: block;
+  margin-top: 1rem;
+}
+
+footer {
+  margin-top: 3rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 1rem 0;
+}
+
+.stack input {
+  font: inherit;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.editor input,
+.editor textarea {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  resize: vertical;
+}
+
+.hint {
+  opacity: 0.75;
+  font-size: 0.9rem;
+}
+
+.hint code {
+  display: inline-block;
+  margin: 0 0.4rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: rgb(128 128 128 / 0.18);
+  word-break: break-all;
+}
+
+.hint button {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+small {
+  opacity: 0.65;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ghost {
+  border-style: dashed;
+}
+
+/* 输入框在 .stack 之外（例如服务器设置页的单行控件）也要有统一外观 */
+input[type="url"],
+input[type="text"] {
+  font: inherit;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+}

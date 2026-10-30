@@ -1,0 +1,17 @@
+.git
+.github
+target
+data
+web/node_modules
+web/dist
+web/.vite
+apps/desktop/src-tauri/gen
+apps/desktop/node_modules
+plugins/keystore/android
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.env.*
+backup

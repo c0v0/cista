@@ -1,0 +1,18 @@
+[package]
+name = "cista-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "cista protocol, crypto and sync state machine (no IO, wasm-capable)"
+
+[dependencies]
+base64 = "0.23.1"
+chacha20poly1305 = "0.11.0"
+ed25519-dalek = "3.0.0"
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+zeroize = { version = "1.9.1", features = ["derive"] }

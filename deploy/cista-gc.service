@@ -1,0 +1,21 @@
+[Unit]
+Description=cista shared-store garbage collection (expired links/tickets/orphan blobs)
+Documentation=file:/srv/cista/README.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=cista
+Group=cista
+EnvironmentFile=/etc/cista/cista.env
+WorkingDirectory=/srv/cista
+ExecStart=/usr/local/bin/cista-server gc
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/srv/cista/data

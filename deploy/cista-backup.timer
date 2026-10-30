@@ -1,0 +1,12 @@
+[Unit]
+Description=Run cista backup daily
+Documentation=file:/srv/cista/README.md
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=cista-backup.service
+
+[Install]
+WantedBy=timers.target

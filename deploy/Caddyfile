@@ -1,0 +1,108 @@
+# cista 反代配置（Caddy 2，要求 >= 2.10：request_body 指令；format filter 需 >= 2.5）
+#
+# 职责：TLS/HSTS、请求体上限、静态 SPA、API/WS 反代、访问日志。
+# 分享 token 只在 `Authorization: Share` 头里，因此 URI 不含长期凭据；
+# 单文件下载票据走 `X-Share-Ticket` 头（45s、单次使用，不进 URL）；访问日志已用 format filter 删除凭据头。
+#
+# 部署：把 example.com 换成真实域名；把 /var/www/cista 换成 `web/dist` 的路径；
+# 后端默认 127.0.0.1:8787（CISTA_BIND）。这样同一个域名同时提供 SPA 与 API，
+# 客户端安装后选「使用当前站点（同源）」即可，无需配置跨域。
+
+example.com {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	# 单文件上限 100 MiB + 信封开销（对 API 与上传生效；静态文件不受影响）
+	request_body {
+		max_size 110MB
+	}
+
+	# API：与路由表一一对应（crates/server/src/lib.rs）
+	handle /api/* {
+		header {
+			Content-Security-Policy "default-src 'none'; sandbox"
+			Cache-Control "no-store"
+		}
+		reverse_proxy 127.0.0.1:8787 {
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+	# SSE 需要立即 flush；放在 /public/* 之前，Caddy 的 handle 互斥。
+	handle /public/workspaces/events {
+		header {
+			Content-Security-Policy "default-src 'none'; sandbox"
+			Cache-Control "no-store"
+		}
+		reverse_proxy 127.0.0.1:8787 {
+			flush_interval -1
+		}
+	}
+	handle /public/* {
+		# 分享面只返回 JSON 或附件：比 SPA 更严，禁止任何脚本/内联渲染。
+		header {
+			Content-Security-Policy "default-src 'none'; sandbox"
+			Cache-Control "no-store"
+		}
+		reverse_proxy 127.0.0.1:8787 {
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+	handle /healthz {
+		reverse_proxy 127.0.0.1:8787
+	}
+	# WebSocket：/ws 关闭代理缓冲（design.md §4.3）
+	handle /ws {
+		reverse_proxy 127.0.0.1:8787 {
+			flush_interval -1
+		}
+	}
+
+	# 静态 SPA：`pnpm -C web build` 的产物；未知路径回 index.html
+	handle {
+		header Content-Security-Policy "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		root * /var/www/cista
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output file /var/log/caddy/cista.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		# 分享 token / bootstrap token / 口令都在请求头里：必须从访问日志中删除，
+		# 否则 ADR 0005「token 不进日志」会被反代默认行为整体抵消。
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Cookie delete
+				request>headers>X-Share-Token delete
+				request>headers>X-Share-Passphrase delete
+				request>headers>X-Share-Passphrase-B64 delete
+				request>headers>X-Share-Ticket delete
+				request>headers>X-File-Name delete
+				request>headers>X-File-Name-B64 delete
+			}
+		}
+	}
+}
+
+# 可选：单文件下载放独立子域（design.md §3.7「下载可放独立子域」）
+# download.example.com {
+# 	header {
+# 		Content-Security-Policy "default-src 'none'; sandbox"
+# 		X-Content-Type-Options "nosniff"
+# 	}
+# 	reverse_proxy 127.0.0.1:8787
+# }

@@ -1,0 +1,55 @@
+# cista 服务端（单实例）。默认只监听 127.0.0.1，由 Caddy 反代并提供 TLS。
+#
+#   cp .env.example .env    # 至少填 CISTA_BOOTSTRAP_TOKEN / CISTA_STATIC_KEY
+#   docker compose up -d --build
+#
+# 数据在 ./data（private.db / shared.db / blobs），备份见 scripts/backup.sh。
+services:
+  # bind mount 若不存在会由 Docker 以 root 创建；这里先修正属主，避免容器 uid 10001 无写权限。
+  init-data:
+    image: debian:13-slim
+    user: "0:0"
+    command: ["chown", "-R", "10001:10001", "/data"]
+    volumes:
+      - ./data:/data
+    restart: "no"
+
+  cista:
+    build: .
+    image: cista-server:local
+    restart: unless-stopped
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      # 容器内必须绑 0.0.0.0 才能被端口映射访问
+      CISTA_BIND: 0.0.0.0:8787
+      CISTA_DATA_DIR: /data
+      # 只有 compose 的 127.0.0.1 端口映射后采信反代头；直接 docker run 默认不信任。
+      CISTA_TRUST_PROXY: "1"
+      # Docker 端口映射后容器看到的对端是网桥网关（私网），需显式允许私网代理。
+      CISTA_TRUST_PROXY_PRIVATE: "1"
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # 容器以 uid 10001 运行；宿主机目录必须属于它：
+      #   sudo install -d -o 10001 -g 10001 ./data
+      - ./data:/data
+    # 容器内无需写根文件系统；可写目录只有 /data 与 /tmp。
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3

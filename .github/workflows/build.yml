@@ -1,0 +1,361 @@
+name: build
+
+# 推送 main / 打 tag 时自动编译；打 v* tag 时把产物挂到 Release。
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Build server
+        run: cargo build --release -p cista-server
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cista-server-${{ matrix.os }}
+          path: |
+            target/release/cista-server
+            target/release/cista-server.exe
+          if-no-files-found: error
+
+  web:
+    name: web (test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm -C web install --frozen-lockfile
+      - run: pnpm -C web typecheck && pnpm -C web test -- --run
+      # 只验证可构建；dist 由桌面端在各自 job 内构建并嵌入，不发布到 Release。
+      - run: pnpm -C web build
+
+  android-core:
+    name: android core (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Install NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" platform-tools >/dev/null
+      - name: Build cista-core for Android
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/aarch64-linux-android21-clang"
+          export CC_aarch64_linux_android="$NDK/aarch64-linux-android21-clang"
+          export AR_aarch64_linux_android="$NDK/llvm-ar"
+          cargo build -p cista-core --release --target aarch64-linux-android
+
+  desktop-linux-ubuntu:
+    name: desktop (ubuntu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev pkg-config libssl-dev
+      - name: Package desktop
+        run: bash scripts/package-desktop.sh deb,appimage
+      - name: Tag deb as ubuntu
+        run: |
+          for f in target/release/bundle/deb/*.deb; do
+            base="$(basename "$f" _amd64.deb)"
+            mv "$f" "$(dirname "$f")/${base}_ubuntu24.04_amd64.deb"
+          done
+          ls target/release/bundle/deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cista-desktop-ubuntu
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  desktop-linux-debian:
+    name: desktop (debian)
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config file xz-utils \
+            libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          # 固定 Node 版本并校验官方 SHA256；不再 curl | bash 远程脚本。
+          NODE_VERSION=22.23.4
+          NODE_SHA256=1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
+          echo "${NODE_SHA256}  node-v${NODE_VERSION}-linux-x64.tar.xz" | sha256sum -c -
+          tar -xJf "node-v${NODE_VERSION}-linux-x64.tar.xz" -C /usr/local --strip-components=1
+          rm -f "node-v${NODE_VERSION}-linux-x64.tar.xz"
+          npm install -g pnpm@9.15.9
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Package desktop (deb only)
+        run: bash scripts/package-desktop.sh deb
+      - name: Tag deb as debian
+        run: |
+          for f in target/release/bundle/deb/*.deb; do
+            base="$(basename "$f" _amd64.deb)"
+            mv "$f" "$(dirname "$f")/${base}_debian13_amd64.deb"
+          done
+          ls target/release/bundle/deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cista-desktop-debian
+          path: target/release/bundle/deb/*.deb
+          if-no-files-found: error
+
+  desktop-windows:
+    name: desktop (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Package desktop (nsis)
+        shell: bash
+        run: bash scripts/package-desktop.sh nsis
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cista-desktop-windows
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  android-apk:
+    name: android apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platform-tools" "platforms;android-36" "build-tools;34.0.0" "ndk;26.3.11579264" >/dev/null
+      - name: Build web assets
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web build
+      - name: Init Android project
+        working-directory: apps/desktop/src-tauri
+        run: pnpm dlx @tauri-apps/cli@2.12.4 android init --ci
+      - name: Harden Android manifest
+        run: python3 scripts/android-manifest.py
+      - name: Build APK
+        working-directory: apps/desktop/src-tauri
+        run: |
+          export NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.3.11579264"
+          pnpm dlx @tauri-apps/cli@2.12.4 android build --apk --ci --config '{"build":{"beforeBuildCommand":""}}'
+      - name: Sign APK with apksigner (optional)
+        if: ${{ github.event_name != 'pull_request' && hashFiles('**/*.apk') != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "no signing secrets configured; leaving APK unsigned (debug-installable only)"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/cista-release.jks"
+          KS_PASSWORD="${KS_PASSWORD//$'\r'/}"
+          KS_PASSWORD="${KS_PASSWORD//$'\n'/}"
+          KEY_PASSWORD="$KS_PASSWORD"
+          KEY_PASSWORD="${KEY_PASSWORD//$'\r'/}"
+          KEY_PASSWORD="${KEY_PASSWORD//$'\n'/}"
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          ALIAS=$("$JAVA_HOME/bin/keytool" -list -keystore "$RUNNER_TEMP/cista-release.jks" \
+            -storepass:env KS_PASSWORD 2>/dev/null | awk -F, '/PrivateKeyEntry/{print $1; exit}')
+          echo "keystore alias: $ALIAS"
+          for apk in $(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*.apk"); do
+            aligned="${apk%-unsigned.apk}-aligned.apk"
+            "$BT/zipalign" -p 4 "$apk" "$aligned"
+            "$BT/apksigner" sign --ks "$RUNNER_TEMP/cista-release.jks" \
+              --ks-pass env:KS_PASSWORD --key-pass env:KS_PASSWORD \
+              --ks-key-alias "$ALIAS" --out "${apk%-unsigned.apk}-signed.apk" "$aligned"
+            echo "signed: ${apk%-unsigned.apk}-signed.apk"
+          done
+          SIGNED=$(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*-signed.apk" | head -1)
+          if [ -n "$SIGNED" ]; then
+            cp "$SIGNED" "$(dirname "$SIGNED")/Cista_android-universal.apk"
+            echo "publish: $(dirname "$SIGNED")/Cista_android-universal.apk"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cista-android-apk
+          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/Cista_android-universal.apk
+          if-no-files-found: ignore
+
+  android-emulator:
+    name: android install check (emulator)
+    needs: [android-apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cista-android-apk
+          path: apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and launch on emulator
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            adb wait-for-device
+            APK=$(find apk -name "*-signed.apk" | head -1); if [ -z "$APK" ]; then APK=$(find apk -name "*.apk" | head -1); fi; echo "installing $APK"; adb install -r "$APK"; adb shell am start -W -n com.cista.notes/.MainActivity
+            adb shell dumpsys package com.cista.notes | grep -E "versionName|firstInstallTime"
+
+  release:
+    name: attach release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [server, web, desktop-linux-ubuntu, desktop-linux-debian, desktop-windows, android-apk, android-emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Flatten downloaded artifacts
+        run: |
+          mkdir -p flat
+          find dist -type f -exec cp -p {} flat/ \;
+          rm -rf dist
+          mv flat dist
+          find dist -type f -printf '%f %s\n' | sort
+      - name: Sign assets (GPG)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "::error::GPG_PRIVATE_KEY 未配置：拒绝发布未签名产物（README 要求 gpg 验证）"
+            exit 1
+          fi
+          echo "key_chars=${#GPG_PRIVATE_KEY} pass_chars=${#GPG_PASSPHRASE}"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          printf '%s\n' "$GPG_PRIVATE_KEY" > "$RUNNER_TEMP/release-key.asc"
+          if ! gpg --batch --import "$RUNNER_TEMP/release-key.asc"; then
+            echo "::error::GPG 私钥导入失败：GPG_PRIVATE_KEY 需为完整 armored 私钥"
+            exit 1
+          fi
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+          echo "fingerprint=$FPR"
+          cd dist
+          sha256sum ./* > SHA256SUMS
+          for f in ./*; do
+            case "$f" in
+              *.asc) continue ;;
+            esac
+            if ! gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --armor --detach-sign "$f"; then
+              echo "::error::签名失败：$f（检查 GPG_PASSPHRASE）"
+              exit 1
+            fi
+          done
+          gpg --armor --export "$FPR" > cista-release-public.asc
+          ls -l
+          echo "signed with $FPR"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists; uploading with --clobber"
+          else
+            if ! out=$(gh release create "$TAG" --title "$TAG" --generate-notes 2>&1); then
+              echo "::error::gh release create 失败: ${out//$'\n'/ }"
+              exit 1
+            fi
+          fi
+          shopt -s nullglob
+          for f in dist/*; do
+            if ! out=$(gh release upload "$TAG" "$f" --clobber 2>&1); then
+              echo "::error::gh release upload 失败 ${f}: ${out//$'\n'/ }"
+              exit 1
+            fi
+          done
+          gh release view "$TAG" --json assets --jq '.assets[].name'
