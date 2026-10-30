@@ -79,3 +79,28 @@ async fn gc_revokes_expired_links_and_releases_blobs() {
     let report = cista_server::gc::run(&app.state.cfg).await.expect("gc 2");
     assert_eq!(report.expired_links, 0, "{report}");
 }
+
+#[tokio::test]
+async fn gc_removes_shared_upload_temps_and_orphan_files() {
+    use std::time::{Duration, SystemTime};
+
+    let app = TestApp::new().await;
+    let dir = app.state.shared.blobs_dir().to_path_buf();
+    let temp = dir.join(".upload-test.tmp");
+    let orphan = dir.join("a".repeat(64));
+    std::fs::write(&temp, b"partial").expect("write temp");
+    std::fs::write(&orphan, b"orphan").expect("write orphan");
+    let old = SystemTime::now() - Duration::from_secs(7200);
+    for path in [&temp, &orphan] {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open");
+        file.set_modified(old).expect("set mtime");
+    }
+
+    let report = cista_server::gc::run(&app.state.cfg).await.expect("gc");
+    assert!(!temp.exists(), "共享上传临时文件应被回收");
+    assert!(!orphan.exists(), "无数据库行的共享 blob 应被回收");
+    assert!(report.orphan_blobs >= 2, "{report}");
+}

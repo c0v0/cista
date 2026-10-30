@@ -56,3 +56,16 @@ Critical 为 0（无私钥泄漏、无 SQL 注入、无路径穿越、无跨租�
 当前结论：未发现匿名公网可利用的 Critical/High；按 `README` 的部署步骤 + Caddy ≥2.10 + 必填密钥，
 可用于个人/小团队自托管。仍不构成安全保证：无第三方审计、进程内 nonce 缓存重启窗口、
 Windows 未 Authenticode、Android 真机与 Keystore 运行时未验证、反代侧全局限速由部署者配置。
+
+### 发布候选第四轮审计（2026-10）
+四路复核（服务端认证/分享、存储/部署、客户端、供应链）在第三轮基础上又修复了：
+未认证慢速 body 饿死 `/api`、单文件分享创建的 OOM/worker 阻塞、慢上传跨归档 TOCTOU、
+`uploads` 按 blob/可变文件名删除导致的链接配额绕过、归档/删除后 restore/WS 复活内容、
+单文件链接忽略 `file_scopes`、链接插入失败泄漏共享副本、票据先消费后开文件、
+WS/SSE 缺少每链接连接上限、Docker bind mount 无 umask、备份单元因重复静态密钥而静默不跑、
+发布签名 fail-open、Debian 打包 `curl | bash` NodeSource。
+
+第四轮后残余风险（Low/运维边界）：WS 撤销最长 10s 生效；删除与同内容上传的极窄竞争仍可能
+留下 404 文件行；反代若部署在可被私网客户端直连的位置，`X-Forwarded-For` 信任边界需收紧；
+Docker 基础镜像/发行版仓库未做 digest 固定；Web 临时端刷新后需操作员 `reset-bootstrap` 重新配对；
+无第三方审计与 Android 真机运行时验证。除这些边界外，当前版本可作为单租户公网自托管发布候选。

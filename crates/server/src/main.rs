@@ -9,15 +9,36 @@ use cista_server::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = Config::from_env()?;
+    let command = std::env::args().nth(1);
+    let is_gc = command.as_deref() == Some("gc");
+    let is_reset_bootstrap = command.as_deref() == Some("reset-bootstrap");
+    let config = if is_gc || is_reset_bootstrap {
+        Config::from_env_for_gc()?
+    } else {
+        Config::from_env()?
+    };
     init_tracing(config.log_json);
 
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
     // 一次性运维命令（SSH）：`cista-server gc` 回收过期链接/票据/共享副本。
-    if std::env::args().nth(1).as_deref() == Some("gc") {
+    if is_gc {
         let report = cista_server::gc::run(&config).await?;
         println!("{report}");
+        return Ok(());
+    }
+
+    // 一次性运维命令（SSH）：Web 临时端刷新/换设备时，bootstrap 已消费会无法重新入网。
+    // 清除标记后必须轮换 CISTA_BOOTSTRAP_TOKEN，再重启服务完成配对。
+    if is_reset_bootstrap {
+        let private = PrivateStore::connect(&config.data_dir.join("private.db")).await?;
+        let removed = sqlx::query("DELETE FROM meta WHERE key = 'bootstrap_used'")
+            .execute(private.pool())
+            .await?
+            .rows_affected();
+        println!(
+            "bootstrap_used removed={removed}; rotate CISTA_BOOTSTRAP_TOKEN and restart before enrolling"
+        );
         return Ok(());
     }
 

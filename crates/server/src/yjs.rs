@@ -31,6 +31,9 @@ pub struct WorkspaceDoc {
     updates_since_snapshot: Mutex<u64>,
     oversize: Mutex<bool>,
     approx_bytes: Mutex<usize>,
+    /// 同一文档的快照必须串行：并发快照可能用较旧的内存状态覆盖较新的快照，
+    /// 并删掉已合并的尾部（丢 update）。
+    snapshot_lock: tokio::sync::Mutex<()>,
 }
 
 impl WorkspaceDoc {
@@ -44,6 +47,7 @@ impl WorkspaceDoc {
             updates_since_snapshot: Mutex::new(0),
             oversize: Mutex::new(false),
             approx_bytes: Mutex::new(0),
+            snapshot_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -288,12 +292,28 @@ pub async fn apply_client_update(
     doc.add_approx_bytes(bytes.len());
 
     // 落库失败时内存已应用该 update；客户端重试会幂等地再次应用并落库。
-    sqlx::query("INSERT INTO doc_updates (workspace_id, \"update\", created_at) VALUES (?, ?, ?)")
-        .bind(&doc.workspace_id)
-        .bind(bytes)
-        .bind(now())
-        .execute(state.shared.pool())
-        .await?;
+    // 条件插入与 purge/归档共享 SQLite 写锁：工作区已离开 active（或已到期）时
+    // 不再写入任何尾部，避免 archive-complete 之后又复活密文。
+    let timestamp = now();
+    let inserted = sqlx::query(
+        "INSERT INTO doc_updates (workspace_id, \"update\", created_at)
+         SELECT ?, ?, ? WHERE EXISTS (
+             SELECT 1 FROM workspaces
+             WHERE id = ? AND state = 'active'
+               AND (expires_at IS NULL OR expires_at > ?)
+         )",
+    )
+    .bind(&doc.workspace_id)
+    .bind(bytes)
+    .bind(timestamp)
+    .bind(&doc.workspace_id)
+    .bind(timestamp)
+    .execute(state.shared.pool())
+    .await?
+    .rows_affected();
+    if inserted != 1 {
+        return Err(AppError::Gone);
+    }
 
     let should_snapshot = {
         let mut counter = doc
@@ -312,6 +332,10 @@ pub async fn apply_client_update(
 
 /// 生成快照并清理已合并的尾部（同一事务，避免「快照没写却删了尾部」）。
 pub async fn snapshot(state: &AppState, doc: &WorkspaceDoc) -> Result<(), AppError> {
+    // 同一文档同时只允许一个快照：否则较旧的快照可能后提交，覆盖较新状态并删掉
+    // 已合并的尾部，造成不可恢复的 update 丢失。
+    let _snapshot_guard = doc.snapshot_lock.lock().await;
+
     // 先读 max(seq)，再编码内存状态：这样快照状态一定覆盖被删除的尾部。
     // 反过来（先编码后读 seq）会把「编码之后、读 seq 之前」的并发 update 删掉但未写入快照。
     let max_seq: i64 =
@@ -341,6 +365,20 @@ pub async fn snapshot(state: &AppState, doc: &WorkspaceDoc) -> Result<(), AppErr
     }
 
     let mut tx = state.shared.pool().begin().await?;
+    // 与 archive/purge 共享 SQLite 写锁：工作区已归档/隔离/到期时不再写快照。
+    let workspace: Option<(String, Option<i64>)> =
+        sqlx::query_as("SELECT state, expires_at FROM workspaces WHERE id = ?")
+            .bind(&doc.workspace_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let active = workspace
+        .map(|(state, expires_at)| {
+            state == "active" && expires_at.map(|expires| expires > now()).unwrap_or(true)
+        })
+        .unwrap_or(false);
+    if !active {
+        return Err(AppError::Gone);
+    }
     sqlx::query(
         "INSERT INTO workspace_notes (workspace_id, rev, yjs_state, state_vector, updated_at)
          VALUES (?, 1, ?, ?, ?)

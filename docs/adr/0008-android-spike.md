@@ -14,7 +14,9 @@ Android 与桌面共用同一套 React SPA；需要系统 WebView 渲染、复�
 2. **Rust 核心复用**：`cista-core` 交叉编译进 APK（`aarch64-linux-android`
    等 target），加密（XChaCha20-Poly1305）、B+ 签名、同步状态机与桌面完全同一份代码。
 3. **密钥存放**：`plugins/keystore`（Kotlin `AndroidKeyStore`，AES/GCM，密钥不可导出，密文存
-   SharedPreferences）；插件不可用时回退应用私有目录（0600）。MK 不写进普通 SharedPreferences。
+   SharedPreferences）；插件不可用时敏感键**失败关闭**，不回退明文/普通私有目录。旧版明文
+   JSON 由启动时的 `purge_legacy_secrets` 清理。设备种子与可选的 MK 都走 AndroidKeyStore，
+   不写普通 SharedPreferences 明文。
 4. **服务端零改动**：Android 只是 B+ 的另一个设备；分享/只读/配额规则不变。
 
 ## 构建

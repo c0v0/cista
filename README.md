@@ -22,12 +22,12 @@
 | 协作 | Yjs 文档、`/ws` 握手（所有者/分享）、只读连接丢弃 update、快照 + 尾部持久化 |
 | 运维 | 归档/隔离区/恢复、`cista-server gc`、限速与认证退避、结构化脱敏日志、CORS 白名单 |
 | 客户端 | Web / Linux / Windows / Android 共用一套 SPA：首次启动填服务器地址、配对、笔记编辑器、附件、本地搜索索引（内存、不落盘） |
-| 原生能力 | Tauri 2 壳 + `plugins/keystore`：桌面走 Secret Service / Credential Manager，Android 走 AndroidKeyStore；只允许存设备种子，MK 不入系统凭据库 |
+| 原生能力 | Tauri 2 壳 + `plugins/keystore`：桌面走 Secret Service / Credential Manager，Android 走 AndroidKeyStore；设备种子与可选的 MK 可存系统安全存储用于自动解锁，「锁定」会清除本机 MK；MK/种子绝不进 localStorage 或服务端 |
 
 单文件上限：共享工作区与私有附件均为 100 MiB（流式写入，不整包进内存）；笔记信封路由 6 MiB。
 
-测试规模：Rust **125 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
-Web **96 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
+测试规模：Rust **131 项**（另有 2 个 `#[ignore]` 演练用例，见 `docs/specs/restore-drill-log.md`），
+Web **97 项**（另有 1 项真服务端 e2e，设置 `CISTA_E2E_URL` / `CISTA_E2E_BOOTSTRAP` 后运行）。
 门禁 `./scripts/verify.sh`：web build → rustfmt → clippy → test → deny → web tests。
 
 数据边界与删除流程见 `docs/privacy.md`。
@@ -54,6 +54,16 @@ Web 端默认同源、也可改成跨域地址：
 
 自建 Web 也可以把默认地址烧进构建：`VITE_API_BASE=https://cista.example.com pnpm -C web build`。
 同源部署时 Caddy 需要同时托管 `web/dist` 与反代 API，见 `deploy/Caddyfile` 的 `handle` 块。
+
+Web 临时端的设备密钥只在内存，刷新/关标签即锁定；而 bootstrap 是**一次性**的。需要重新配对
+（或给第二台设备入网）时，由操作员 SSH 执行：
+
+```bash
+sudo -u cista /usr/local/bin/cista-server reset-bootstrap   # 清除已用标记
+# 轮换 /etc/cista/cista.env 里的 CISTA_BOOTSTRAP_TOKEN，然后 systemctl restart cista
+```
+
+这是本地运维命令，不是公开接口；完成后把 token 从环境里删除。
 
 ## 部署与运维
 
@@ -150,5 +160,13 @@ deploy/         systemd unit/timer、Caddyfile（静态站点 + API 反代）
   部署后可用 `grep -c '"Authorization"' /var/log/caddy/cista.log` 应得到 0。
 - **GC 定时器**：`deploy/cista-gc.{service,timer}` 每小时清理过期链接/票据、把到期工作区转入隔离区，
   并删除无数据库行的孤儿共享 blob；不装定时器时磁盘与配额会持续漂移。
-- **磁盘水位**：`CISTA_MIN_FREE_BYTES`（默认 512 MiB），低于该值上传直接 507。
-- 上传/下载均为流式：单请求内存占用与文件大小无关（下载分块解密）。
+- **磁盘水位**：`CISTA_MIN_FREE_BYTES`（默认 512 MiB）；上传前要求
+  `水位 + 8 × CISTA_MAX_FILE_BYTES`（覆盖私有/公网/单文件分享的在途槽位），不足返回 507。
+- **上传/下载均为流式**：单请求内存占用与文件大小无关（下载分块解密）；单文件分享创建会整包复制，
+  已串行化并做磁盘水位检查。
+- **API/分享响应统一 `Cache-Control: no-store`**（服务端 + Caddy）：避免浏览器缓存把 A 链接的
+  元数据/票据响应复用给 B 链接。
+- **Docker 入口 `umask 0077`**：与 systemd 的 `UMask=0077` 对齐，bind mount 里的
+  `shared.db`/`private.db`/blob 不对同机其他用户可读。
+- **备份单元不需要 `CISTA_STATIC_KEY`**：`cista-server gc` 不接触静态加密，`backup.env` 不再保存第二份密钥。
+- **长连接复核**：`/ws` 每 10 秒复核链接/设备撤销与工作区状态；归档/删除会撤销工作区链接并卸载内存文档。

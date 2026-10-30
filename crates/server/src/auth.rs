@@ -170,6 +170,24 @@ pub async fn require_signed(
 
     let (parts, body) = request.into_parts();
 
+    // 连续失败会指数退避：伪造签名/重放不能无限重试。
+    // 必须在占用 body_budget / 读 body 之前检查，否则被锁 IP 仍可用慢速请求饿死 /api。
+    let now_ts = now();
+    let peer = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let client = client_ip(peer, &parts.headers, state.cfg.trust_proxy)
+        .unwrap_or_else(|| "unknown".to_string());
+    let failure_key = failure_key(&client);
+    if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
+        return Err(AppError::RateLimited { retry_after_secs });
+    }
+    if let Err(error) = precheck_signed_headers(&state, &parts.headers, now_ts).await {
+        state.failures.record(&failure_key, now_ts);
+        return Err(error);
+    }
+
     // 全局并发预算：每次认证最多缓冲 `limit` 字节，15 个并发就已经接近内存上限。
     let permit = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -194,18 +212,6 @@ pub async fn require_signed(
         }
     };
 
-    // 连续失败会指数退避：伪造签名/重放不能无限重试。
-    let now_ts = now();
-    let peer = parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|info| info.0.ip());
-    let client = client_ip(peer, &parts.headers, state.cfg.trust_proxy)
-        .unwrap_or_else(|| "unknown".to_string());
-    let failure_key = failure_key(&client);
-    if let Some(retry_after_secs) = state.failures.locked_for(&failure_key, now_ts) {
-        return Err(AppError::RateLimited { retry_after_secs });
-    }
     let device =
         match verify_headers(&state, &parts.headers, &parts.method, &parts.uri, &bytes).await {
             Ok(device) => {
@@ -280,9 +286,17 @@ pub async fn require_signed_upload(
         return Err(AppError::RateLimited { retry_after_secs });
     }
 
-    // 与共享上传一致：低于水位直接拒绝，避免私有目录被写满。
+    // 在写任何字节到磁盘之前做便宜的身份预检：未知设备/过期时间戳/畸形 nonce
+    // 不应占满 upload_budget 并落 100 MiB 临时文件。签名本身仍要等摘要。
+    if let Err(error) = precheck_signed_headers(&state, &parts.headers, now_ts).await {
+        state.failures.record(&failure_key, now_ts);
+        return Err(error);
+    }
+
+    // 与共享上传一致：预留在途上传的完整上限，避免并发上传把卷写穿。
     if let Some(free) = crate::state::free_bytes(state.data_dir()) {
-        if free < state.cfg.min_free_bytes.max(state.cfg.max_file_bytes) {
+        let required = state.cfg.upload_free_floor();
+        if free < required {
             return Err(AppError::InsufficientStorage);
         }
     }
@@ -357,6 +371,36 @@ pub async fn require_signed_upload(
     // handler 成功时会把临时文件 rename 走；失败路径由这里兜底清理。
     let _ = tokio::fs::remove_file(&temp).await;
     Ok(response)
+}
+
+/// 只做形状/设备存在性检查，不消费 nonce、也不验证签名（签名覆盖 body 摘要）。
+async fn precheck_signed_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+    now_ts: i64,
+) -> Result<(), AppError> {
+    let device_id = header(headers, H_DEVICE).ok_or(AppError::Unauthorized)?;
+    let nonce_hex = header(headers, H_NONCE).ok_or(AppError::Unauthorized)?;
+    let timestamp = header(headers, H_TIMESTAMP)
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let signature = header(headers, H_SIGNATURE).ok_or(AppError::Unauthorized)?;
+    if (now_ts - timestamp).abs() > auth::MAX_SKEW_SECS {
+        return Err(AppError::Unauthorized);
+    }
+    let nonce = hex::decode(nonce_hex).map_err(|_| AppError::Unauthorized)?;
+    auth::validate_nonce(&nonce).map_err(|_| AppError::Unauthorized)?;
+    let signature = hex::decode(signature).map_err(|_| AppError::Unauthorized)?;
+    if signature.len() != 64 {
+        return Err(AppError::Unauthorized);
+    }
+    let known: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM devices WHERE id = ? AND revoked_at IS NULL")
+            .bind(device_id)
+            .fetch_optional(state.private.pool())
+            .await?;
+    known.ok_or(AppError::Unauthorized)?;
+    Ok(())
 }
 
 async fn spool_body(body: Body, path: &Path, limit: usize) -> Result<(u64, [u8; 32]), AppError> {

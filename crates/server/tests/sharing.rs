@@ -4,7 +4,9 @@
 mod common;
 
 use axum::http::StatusCode;
-use cista_core::protocol::{ConfirmResponse, PublicFileEntry, PublicFileList, PublicMeta};
+use cista_core::protocol::{
+    ConfirmResponse, LinkInfo, PublicFileEntry, PublicFileList, PublicMeta,
+};
 use cista_core::share::{new_share_token, FilesMode, NoteMode, ShareKind};
 use common::{link_request, now_ts, TestApp};
 use tower::ServiceExt;
@@ -771,4 +773,75 @@ async fn outstanding_tickets_are_capped_per_link() {
         .await
         .expect("count tickets");
     assert!(count <= 8, "tickets={count}");
+}
+
+#[tokio::test]
+async fn file_link_rejects_files_off_scope() {
+    let app = TestApp::new().await;
+    let device = app.enroll("desktop").await;
+    let blob = app.upload_private_blob(&device, b"scope-check").await;
+    let (request, _token) =
+        link_request(ShareKind::File, &blob.hash, NoteMode::Off, FilesMode::Off);
+    let (status, body) = app.create_link(&device, request).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
+#[tokio::test]
+async fn deleting_one_of_two_same_content_files_keeps_link_quota_for_the_other() {
+    let app = TestApp::new().await;
+    let device = app.enroll("desktop").await;
+    let workspace = app.create_workspace(&device, "配额").await;
+    let (request, token) = link_request(
+        ShareKind::Workspace,
+        &workspace.id,
+        NoteMode::Off,
+        FilesMode::Rwm,
+    );
+    let (status, body) = app.create_link(&device, request).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let link: LinkInfo = TestApp::json(&body);
+
+    let content = b"same-content";
+    let (status, body) = upload(&app, &token, "a.txt", "text/plain", content, None).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let first: PublicFileEntry = TestApp::json(&body);
+
+    let rename_uri = format!("/public/workspaces/files/{}", first.id);
+    let (status, _) = app
+        .send(app.public(
+            "PATCH",
+            &rename_uri,
+            &token,
+            br#"{"name":"b.txt"}"#,
+            &[("content-type", "application/json")],
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = upload(&app, &token, "a.txt", "text/plain", content, None).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let second: PublicFileEntry = TestApp::json(&body);
+
+    let delete_uri = format!("/public/workspaces/files/{}", second.id);
+    let (status, _) = app
+        .send(app.public("DELETE", &delete_uri, &token, b"", &[]))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let uploads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM uploads WHERE link_id = ?")
+        .bind(&link.id)
+        .fetch_one(app.state.shared.pool())
+        .await
+        .expect("count uploads");
+    assert_eq!(uploads, 1, "删除第二个文件不得清掉第一个文件的配额行");
 }

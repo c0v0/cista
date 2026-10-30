@@ -114,6 +114,10 @@ pub fn can_manage_files(scopes: u32) -> bool {
 
 /// 128-bit 分享 token（base64url 无填充，22 字符），客户端生成。
 pub const TOKEN_BYTES: usize = 16;
+/// 分享 token 字符集上限。
+pub const MAX_TOKEN_LEN: usize = 64;
+/// 口令上限：Argon2 对超长输入会线性增加 CPU/内存，公网头必须有硬上限。
+pub const MAX_PASSPHRASE_BYTES: usize = 256;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TokenError {

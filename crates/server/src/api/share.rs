@@ -11,8 +11,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use cista_core::protocol::{CreateLinkRequest, LinkInfo};
 use cista_core::share::{
-    file_scopes, hash_token, is_valid_token_shape, note_scopes, validate_scopes, FilesMode,
-    ShareKind,
+    can_read_files, file_scopes, hash_token, is_valid_token_shape, note_scopes, validate_scopes,
+    FilesMode, ShareKind, MAX_PASSPHRASE_BYTES,
 };
 
 use crate::error::AppError;
@@ -89,6 +89,10 @@ pub async fn create(
     let note_bits = note_scopes(request.note_mode);
     let file_bits = file_scopes(request.files_mode);
     validate_scopes(note_bits, file_bits).map_err(|_| AppError::BadRequest("invalid_scopes"))?;
+    // 单文件链接本质是“读一个文件”：files=off/drop 不应签发可下载票据。
+    if request.kind == ShareKind::File && !can_read_files(file_bits) {
+        return Err(AppError::BadRequest("file_link_requires_read"));
+    }
 
     // `drop` 默认要求口令（`design.md` §3.7）；空白口令按未填处理。
     let passphrase = request
@@ -100,7 +104,7 @@ pub async fn create(
         return Err(AppError::BadRequest("passphrase_required"));
     }
     let passphrase_hash = match passphrase {
-        Some(passphrase) => Some(hash_passphrase(passphrase)?),
+        Some(passphrase) => Some(hash_passphrase(&state, passphrase).await?),
         None => None,
     };
     // 工作区链接的“使用次数”没有可靠的计数语义（正文走 WS），明确拒绝而不是静默忽略。
@@ -125,11 +129,25 @@ pub async fn create(
                     .fetch_optional(state.private.pool())
                     .await?;
             let (size,) = row.ok_or(AppError::NotFound)?;
+            // 整包读取/加密复制最多 max_file_bytes；串行化，避免并发 120 份 OOM。
+            let _link_permit = state
+                .link_create_budget
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Internal(anyhow::anyhow!("link budget closed")))?;
+            let size_u64 = u64::try_from(size).unwrap_or(0);
+            if let Some(free) = crate::state::free_bytes(state.data_dir()) {
+                if free < state.cfg.upload_free_floor() {
+                    return Err(AppError::InsufficientStorage);
+                }
+            }
             let bytes = tokio::fs::read(&private_path)
                 .await
                 .map_err(|_| AppError::NotFound)?;
 
-            // 复制到共享域：同内容只计一次实例配额（refcount 去重）。
+            // 文件先落盘，再开事务记账：不把 100 MiB 的加密/写入放在 SQLite 事务里。
+            crate::public::store_shared_blob(&state, &request.object_id, &bytes).await?;
             let mut tx = state.shared.pool().begin().await?;
             let existing: Option<(i64, i64)> = sqlx::query_as(
                 "SELECT size, refcount FROM blobs WHERE hash = ? AND scope = 'shared'",
@@ -138,10 +156,8 @@ pub async fn create(
             .fetch_optional(&mut *tx)
             .await?;
             if existing.is_none() {
-                quota::reserve_instance(&mut tx, u64::try_from(size).unwrap_or(0), state.quotas())
-                    .await?;
+                quota::reserve_instance(&mut tx, size_u64, state.quotas()).await?;
             }
-            crate::public::store_shared_blob(&state, &request.object_id, &bytes).await?;
             sqlx::query(
                 "INSERT INTO blobs (hash, scope, size, refcount, created_at)
                  VALUES (?, 'shared', ?, 1, ?)
@@ -208,10 +224,17 @@ pub async fn create(
     .execute(state.shared.pool())
     .await;
 
-    match insert {
-        Ok(_) => {}
-        Err(err) if is_unique_violation(&err) => return Err(AppError::AlreadyExists),
-        Err(err) => return Err(err.into()),
+    if let Err(err) = insert {
+        // 文件副本/引用已经提交；链接行失败时必须补偿，否则无主副本会泄漏配额。
+        if request.kind == ShareKind::File {
+            if let Err(cleanup) = release_shared_copy(&state, &object_id).await {
+                tracing::warn!(blob = %object_id, error = ?cleanup, "release shared copy after link insert failure");
+            }
+        }
+        if is_unique_violation(&err) {
+            return Err(AppError::AlreadyExists);
+        }
+        return Err(err.into());
     }
 
     tracing::info!(link = %id, kind = ?request.kind, "share link created");
@@ -299,16 +322,32 @@ pub(crate) async fn release_shared_copy(state: &AppState, hash: &str) -> Result<
     Ok(())
 }
 
-fn hash_passphrase(passphrase: &str) -> Result<String, AppError> {
-    let mut salt_bytes = [0u8; 16];
-    getrandom::fill(&mut salt_bytes)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("rng unavailable")))?;
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("salt encoding")))?;
-    Argon2::default()
-        .hash_password(passphrase.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("passphrase hashing")))
+async fn hash_passphrase(state: &AppState, passphrase: &str) -> Result<String, AppError> {
+    if passphrase.len() > MAX_PASSPHRASE_BYTES {
+        return Err(AppError::BadRequest("passphrase_too_long"));
+    }
+    let permit = state
+        .hash_budget
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("hash budget closed")))?;
+    let passphrase = passphrase.to_string();
+    let hashed = tokio::task::spawn_blocking(move || {
+        let mut salt_bytes = [0u8; 16];
+        getrandom::fill(&mut salt_bytes)
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("rng unavailable")))?;
+        let salt = SaltString::encode_b64(&salt_bytes)
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("salt encoding")))?;
+        Argon2::default()
+            .hash_password(passphrase.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("passphrase hashing")))
+    })
+    .await
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("passphrase hashing task failed")))?;
+    drop(permit);
+    hashed
 }
 
 fn is_blob_hash(raw: &str) -> bool {

@@ -40,6 +40,10 @@ pub struct RateLimiter {
     buckets: Mutex<HashMap<String, Bucket>>,
 }
 
+/// 桶数量硬上限。公网 IPv6 可以让攻击者用海量源地址制造唯一 key；
+/// 没有上限时清理逻辑只删过期项，仍会被活跃 key 撑爆内存。
+const MAX_BUCKETS: usize = 65_536;
+
 impl RateLimiter {
     pub fn new(config: RateConfig) -> Self {
         Self {
@@ -60,9 +64,12 @@ impl RateLimiter {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        // key 数量有界（设备/链接），但仍做一次粗粒度清理，避免长期累积。
-        if buckets.len() > 4096 {
-            buckets.retain(|_, bucket| now.saturating_sub(bucket.updated_at) < 300);
+        // 容量保护优先于精确 LRU：满了就淘汰一个任意 key，避免 O(n) 扫描
+        // 反而成为 CPU DoS 放大器。
+        if buckets.len() >= MAX_BUCKETS {
+            if let Some(victim) = buckets.keys().next().cloned() {
+                buckets.remove(&victim);
+            }
         }
 
         let bucket = buckets.entry(key.to_string()).or_insert(Bucket {
@@ -97,6 +104,9 @@ pub struct FailureTracker {
     window: i64,
     inner: Mutex<HashMap<String, FailureState>>,
 }
+
+/// 与限速桶相同的容量上限：按 IP 的 key 可被大量源地址撑大。
+const MAX_FAILURE_KEYS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy)]
 struct FailureState {
@@ -133,8 +143,10 @@ impl FailureTracker {
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if inner.len() > 4096 {
-            inner.retain(|_, state| now.saturating_sub(state.last_failure) < 3600);
+        if inner.len() >= MAX_FAILURE_KEYS {
+            if let Some(victim) = inner.keys().next().cloned() {
+                inner.remove(&victim);
+            }
         }
         let state = inner.entry(key.to_string()).or_insert(FailureState {
             count: 0,

@@ -9,6 +9,7 @@ import { ShareError } from "../lib/shareClient";
 export const FILE_READ = 1 << 2;
 export const FILE_UPLOAD = 1 << 3;
 export const FILE_MANAGE = 1 << 4;
+export const FILE_DROP_UPLOAD_ONLY = 1 << 5;
 
 export interface FilePermissions {
   canRead: boolean;
@@ -19,7 +20,8 @@ export interface FilePermissions {
 export function filePermissions(fileScopes: number): FilePermissions {
   return {
     canRead: (fileScopes & FILE_READ) !== 0,
-    canUpload: (fileScopes & FILE_UPLOAD) !== 0,
+    canUpload:
+      (fileScopes & FILE_UPLOAD) !== 0 || (fileScopes & FILE_DROP_UPLOAD_ONLY) !== 0,
     canManage: (fileScopes & FILE_MANAGE) !== 0,
   };
 }

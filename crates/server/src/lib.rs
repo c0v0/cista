@@ -24,7 +24,9 @@ pub mod ws;
 pub mod yjs;
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
+use axum::http::{header, HeaderValue};
 use axum::middleware;
+use axum::response::Response;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -108,6 +110,9 @@ pub fn app(state: AppState) -> Router {
 
     // 每 IP 桶在最外层（CORS 之下）：未认证洪泛也会被限速。
     let router = router.layer(middleware::from_fn_with_state(state.clone(), ip_limit));
+    // 所有 API/分享响应都可能含元数据或凭据派生内容：禁止浏览器/代理缓存。
+    // 否则同一浏览器打开第二个分享链接时可能命中第一个链接的缓存响应。
+    let router = router.layer(middleware::from_fn(no_store));
 
     if let Some(origin) = state.cfg.cors_origin.clone() {
         match cors_layer(&origin) {
@@ -116,6 +121,15 @@ pub fn app(state: AppState) -> Router {
         }
     }
     router
+}
+
+/// 所有路由统一 `Cache-Control: no-store`：分享元数据、票据、密文响应都不应落缓存。
+async fn no_store(request: axum::extract::Request, next: middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// 每 IP 令牌桶；拿不到对端地址时落到 `ip:unknown`（单实例内共用一个桶）。

@@ -9,7 +9,8 @@ import { rememberDevice, rememberMasterKey, restoreDevice } from "../lib/remembe
 import { describeServer } from "../lib/serverSettings";
 
 /**
- * 配对页：bootstrap token 只能入网一次；私钥种子与 MK 都只留在内存。
+ * 配对页：bootstrap token 只能入网一次；私钥种子与 MK 默认只在内存，
+ * 原生端可显式写入系统安全存储（自动解锁）。
  *
  * - 新设备：生成 32B Ed25519 种子 → 入网 → 生成 MK（并展示恢复码，用户自行离线保存）。
  * - 已有恢复码：粘贴即可用同一把 MK 解密历史笔记。
@@ -58,7 +59,7 @@ export function PairPage({
           crypto.getRandomValues(new Uint8Array(32)),
         ));
       if (!remembered && store) {
-        // 桌面端写系统钥匙串；Android 的 Keystore 适配尚未实现，失败不影响本次配对。
+        // 桌面端写系统钥匙串；Android 走 Keystore 插件，失败则仅本次会话可用。
         try {
           await rememberDevice(store, device);
         } catch {

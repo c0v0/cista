@@ -7,7 +7,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
 use cista_core::protocol::{ConfirmResponse, PublicMeta};
-use cista_core::share::{hash_token, token_fingerprint, ShareKind};
+use cista_core::share::{can_read_files, hash_token, token_fingerprint, ShareKind};
 
 use crate::error::AppError;
 use crate::public::{load_link, load_link_for_ticket, require_passphrase, serve_blob, ShareToken};
@@ -22,6 +22,9 @@ pub async fn meta(
     ShareToken(token): ShareToken,
 ) -> Result<Json<PublicMeta>, AppError> {
     let link = load_link(&state, &token, ShareKind::File).await?;
+    if !can_read_files(link.file_scopes) {
+        return Err(AppError::Forbidden);
+    }
     Ok(Json(PublicMeta {
         kind: ShareKind::File,
         title: link.title,
@@ -41,6 +44,9 @@ pub async fn confirm(
     headers: HeaderMap,
 ) -> Result<Json<ConfirmResponse>, AppError> {
     let link = load_link(&state, &token, ShareKind::File).await?;
+    if !can_read_files(link.file_scopes) {
+        return Err(AppError::Forbidden);
+    }
     require_passphrase(&state, &link, &headers).await?;
 
     let timestamp = now();
@@ -101,6 +107,9 @@ pub async fn blob(
         .filter(|value| !value.is_empty())
         .ok_or(AppError::Unauthorized)?;
     let link = load_link_for_ticket(&state, &token, ShareKind::File).await?;
+    if !can_read_files(link.file_scopes) {
+        return Err(AppError::Forbidden);
+    }
 
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT link_id, expires_at, blob_hash FROM blob_tickets WHERE ticket_hash = ?",
@@ -113,6 +122,10 @@ pub async fn blob(
         return Err(AppError::Unauthorized);
     }
     if ticket_expires <= now() {
+        return Err(AppError::Gone);
+    }
+    // 先确认本体存在，避免一次瞬时缺失把一次性链接的次数烧掉。
+    if !tokio::fs::try_exists(state.shared.blob_path(&blob_hash)).await? {
         return Err(AppError::Gone);
     }
     // 票据单次使用：并发下载只有一个请求能删掉这一行。

@@ -59,15 +59,17 @@ fn row_to_info(row: WorkspaceRow) -> Result<WorkspaceInfo, AppError> {
 const WORKSPACE_COLUMNS: &str =
     "id, title, origin, source_note_id, state, expires_at, quarantined_at, archived_at, created_at";
 
-/// 已到期的 active 工作区在 gc 之前也应允许导出/归档。
+/// 只有“过期/隔离中”或“已到期但仍 active”的工作区可恢复；
+/// archived/purged 是终态，不能靠 restore 复活（否则 purge 后旧链接会重新可用）。
 fn transitionable(workspace: &WorkspaceInfo) -> bool {
-    matches!(
-        workspace.state,
-        WorkspaceState::Expired | WorkspaceState::Quarantined
-    ) || workspace
-        .expires_at
-        .map(|expires_at| expires_at <= now())
-        .unwrap_or(false)
+    match workspace.state {
+        WorkspaceState::Expired | WorkspaceState::Quarantined => true,
+        WorkspaceState::Active => workspace
+            .expires_at
+            .map(|expires_at| expires_at <= now())
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
 async fn load_workspace(state: &AppState, id: &str) -> Result<WorkspaceInfo, AppError> {
@@ -105,14 +107,22 @@ pub async fn restore(
         return Err(AppError::BadRequest("workspace_not_quarantined"));
     }
 
-    sqlx::query(
+    let timestamp = now();
+    let affected = sqlx::query(
         "UPDATE workspaces
          SET state = 'active', expires_at = NULL, quarantined_at = NULL, archived_at = NULL
-         WHERE id = ?",
+         WHERE id = ?
+           AND (state IN ('expired', 'quarantined')
+                OR (state = 'active' AND expires_at IS NOT NULL AND expires_at <= ?))",
     )
     .bind(&id)
+    .bind(timestamp)
     .execute(state.shared.pool())
-    .await?;
+    .await?
+    .rows_affected();
+    if affected != 1 {
+        return Err(AppError::BadRequest("workspace_not_quarantined"));
+    }
 
     tracing::info!(workspace = %id, "workspace restored from quarantine");
     load_workspace(&state, &id).await.map(Json)
@@ -130,12 +140,9 @@ pub async fn archive_complete(
         return Err(AppError::BadRequest("workspace_not_quarantined"));
     }
 
-    let released = purge_shared_data(&state, &id).await?;
-    sqlx::query("UPDATE workspaces SET state = 'archived', archived_at = ? WHERE id = ?")
-        .bind(now())
-        .bind(&id)
-        .execute(state.shared.pool())
-        .await?;
+    let released = purge_shared_data(&state, &id, "archived").await?;
+    // 内存中的 Yjs 文档也要丢弃；否则旧会话/空闲缓存可能把内容写回。
+    state.documents.unload(&id);
 
     tracing::info!(workspace = %id, released_bytes = released, "workspace archived");
     load_workspace(&state, &id).await.map(Json)
@@ -198,13 +205,9 @@ pub async fn delete_note(
     }
 
     for (workspace_id, uploads) in &rows {
-        let released = purge_shared_data(&state, workspace_id).await?;
+        let released = purge_shared_data(&state, workspace_id, "purged").await?;
         // 投影不再可达：公网路由按状态拒绝（410），行保留用于溯源。
-        sqlx::query("UPDATE workspaces SET state = 'purged', archived_at = ? WHERE id = ?")
-            .bind(now())
-            .bind(workspace_id)
-            .execute(state.shared.pool())
-            .await?;
+        state.documents.unload(workspace_id);
         tracing::info!(
             workspace = %workspace_id,
             source_note = %id,
@@ -241,7 +244,11 @@ pub async fn delete_note(
 /// 清空一个工作区的共享数据并释放配额；返回释放的字节数。
 ///
 /// 顺序：统计 → 删行 → 释放配额 → blob 引用递减（归零删本体）→ 提交 → 删文件。
-async fn purge_shared_data(state: &AppState, workspace_id: &str) -> Result<u64, AppError> {
+async fn purge_shared_data(
+    state: &AppState,
+    workspace_id: &str,
+    target_state: &str,
+) -> Result<u64, AppError> {
     let files: Vec<(String, i64)> = sqlx::query_as(
         "SELECT blob_hash, size FROM workspace_files
          WHERE workspace_id = ? AND deleted_at IS NULL",
@@ -256,6 +263,15 @@ async fn purge_shared_data(state: &AppState, workspace_id: &str) -> Result<u64, 
         .sum();
 
     let mut tx = state.shared.pool().begin().await?;
+    // 归档/删除即撤销该工作区的所有链接；restore 也不能把已撤销链接复活。
+    sqlx::query(
+        "UPDATE share_links SET revoked_at = ?
+         WHERE kind = 'workspace' AND object_id = ? AND revoked_at IS NULL",
+    )
+    .bind(now())
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM workspace_files WHERE workspace_id = ?")
         .bind(workspace_id)
         .execute(&mut *tx)
@@ -296,6 +312,14 @@ async fn purge_shared_data(state: &AppState, workspace_id: &str) -> Result<u64, 
             remove_files.push(hash.clone());
         }
     }
+    // 状态变更与清库同一事务：否则 purge 与 archive 更新之间，打开中的 WS
+    // 仍看到 active 并把新的 doc_updates 写回来。
+    sqlx::query("UPDATE workspaces SET state = ?, archived_at = ? WHERE id = ?")
+        .bind(target_state)
+        .bind(now())
+        .bind(workspace_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
 
     for hash in remove_files {

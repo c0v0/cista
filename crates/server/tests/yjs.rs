@@ -265,3 +265,86 @@ async fn ws_route_requires_handshake() {
         "unexpected status: {status}"
     );
 }
+
+#[tokio::test]
+async fn archived_workspace_rejects_updates_and_snapshot() {
+    let (app, _device, workspace) = setup().await;
+    let server = app
+        .state
+        .documents
+        .get_or_load(&app.state, &workspace.id)
+        .await
+        .expect("load doc");
+
+    let (first, first_text) = client_doc();
+    insert(&first_text, &first, 0, "before-archive");
+    apply_client_update(&app.state, &server, &full_update(&first), true)
+        .await
+        .expect("apply before archive");
+
+    sqlx::query("UPDATE workspaces SET state = 'archived' WHERE id = ?")
+        .bind(&workspace.id)
+        .execute(app.state.shared.pool())
+        .await
+        .expect("archive workspace");
+
+    let (second, second_text) = client_doc();
+    insert(&second_text, &second, 0, "after-archive");
+    let error = apply_client_update(&app.state, &server, &full_update(&second), true)
+        .await
+        .expect_err("archived workspace must reject updates");
+    assert!(
+        matches!(error, cista_server::error::AppError::Gone),
+        "应当 410: {error:?}"
+    );
+
+    let error = snapshot(&app.state, &server)
+        .await
+        .expect_err("archived workspace must not snapshot");
+    assert!(matches!(error, cista_server::error::AppError::Gone));
+
+    let tail: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM doc_updates WHERE workspace_id = ?")
+        .bind(&workspace.id)
+        .fetch_one(app.state.shared.pool())
+        .await
+        .expect("count tail");
+    assert_eq!(tail, 1, "归档后的 update 不得落库");
+
+    app.state.documents.unload(&workspace.id);
+    let reloaded = app
+        .state
+        .documents
+        .get_or_load(&app.state, &workspace.id)
+        .await
+        .expect("reload");
+    assert_eq!(reloaded.text(), "before-archive");
+}
+
+#[tokio::test]
+async fn concurrent_snapshots_keep_latest_state() {
+    let (app, _device, workspace) = setup().await;
+    let server = app
+        .state
+        .documents
+        .get_or_load(&app.state, &workspace.id)
+        .await
+        .expect("load doc");
+    let (client, text) = client_doc();
+    insert(&text, &client, 0, "latest");
+    apply_client_update(&app.state, &server, &full_update(&client), true)
+        .await
+        .expect("apply");
+
+    let (a, b) = tokio::join!(snapshot(&app.state, &server), snapshot(&app.state, &server));
+    a.expect("snapshot a");
+    b.expect("snapshot b");
+
+    app.state.documents.unload(&workspace.id);
+    let reloaded = app
+        .state
+        .documents
+        .get_or_load(&app.state, &workspace.id)
+        .await
+        .expect("reload");
+    assert_eq!(reloaded.text(), "latest");
+}

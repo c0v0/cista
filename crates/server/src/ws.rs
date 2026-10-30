@@ -19,12 +19,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 
 use crate::error::AppError;
-use crate::public::{ensure_public, load_link, load_workspace};
+use crate::public::{ensure_public, load_link, load_workspace, revalidate_link};
 use crate::state::{now, AppState};
 use crate::wire::{self, WireMessage};
 use crate::yjs::{apply_client_update, Documents, WorkspaceDoc};
 
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 握手 JSON 上限：正常请求只有几百字节。
 pub const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
 /// 单条 y-sync 消息上限，与 `yjs::MAX_UPDATE_BYTES` 一致。
@@ -53,11 +53,18 @@ struct Handshake {
     passphrase: Option<String>,
 }
 
+/// 长连接期间复核身份所需的凭据；token 只在内存里。
+enum SessionAuth {
+    Owner { device: String },
+    Share { token: String, link_id: String },
+}
+
 struct Session {
     workspace_id: String,
     can_write: bool,
     frames: u32,
     window_start: i64,
+    auth: SessionAuth,
 }
 
 /// WS 会话结束时释放活跃计数，允许文档被空闲回收。
@@ -89,10 +96,10 @@ pub async fn handler(
     if !origin_allowed(&state, &headers) {
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
-    let Ok(permit) = state.ws_budget.clone().try_acquire_owned() else {
+    let Ok(handshake_permit) = state.ws_handshake_budget.clone().try_acquire_owned() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "too many websocket connections",
+            "too many websocket handshakes",
         )
             .into_response();
     };
@@ -101,8 +108,7 @@ pub async fn handler(
         .max_message_size(MAX_WS_MESSAGE)
         .max_frame_size(MAX_WS_MESSAGE);
     upgrade.on_upgrade(move |socket| async move {
-        let _permit = permit;
-        if let Err(error) = run_session(state, socket).await {
+        if let Err(error) = run_session(state, socket, handshake_permit).await {
             tracing::info!(error = ?error, "ws session closed");
         }
     })
@@ -139,9 +145,33 @@ fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppError> {
+async fn run_session(
+    state: AppState,
+    mut socket: WebSocket,
+    handshake_permit: tokio::sync::OwnedSemaphorePermit,
+) -> Result<(), AppError> {
     let raw = read_handshake(&mut socket).await?;
     let mut session = authenticate(&state, &raw).await?;
+    // 只有通过握手鉴权的连接才占长连接额度；未认证连接最多占 handshake 额度。
+    let session_permit =
+        state
+            .ws_budget
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| AppError::RateLimited {
+                retry_after_secs: 1,
+            })?;
+    drop(handshake_permit);
+    let _session_permit = session_permit;
+    let (connection_key, connection_max) = match &session.auth {
+        SessionAuth::Owner { device } => (format!("ws:dev:{device}"), 16),
+        SessionAuth::Share { link_id, .. } => (format!("ws:link:{link_id}"), 8),
+    };
+    let _connection = state
+        .acquire_connection(&connection_key, connection_max)
+        .ok_or(AppError::RateLimited {
+            retry_after_secs: 1,
+        })?;
     // 活跃会话期间禁止空闲回收（Drop 时自动 release）。
     state.documents.acquire(&session.workspace_id);
     let _active = ActiveSession {
@@ -160,6 +190,10 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
         .map_err(|_| AppError::Internal(anyhow::anyhow!("websocket send failed")))?;
 
     let mut broadcasts = state.ws_events.subscribe(&session.workspace_id);
+    let mut revalidate = tokio::time::interval(Duration::from_secs(10));
+    revalidate.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // 跳过 interval 的立即首 tick；握手时已经完整校验过一次。
+    revalidate.tick().await;
     tracing::info!(
         workspace = %session.workspace_id,
         can_write = session.can_write,
@@ -168,6 +202,11 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
 
     loop {
         tokio::select! {
+            _ = revalidate.tick() => {
+                if !session_still_valid(&state, &mut session).await {
+                    break;
+                }
+            }
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(WsMessage::Binary(bytes))) => {
@@ -227,6 +266,39 @@ async fn run_session(state: AppState, mut socket: WebSocket) -> Result<(), AppEr
     Ok(())
 }
 
+/// 10 秒一次的撤销/过期复核；失败即断开，避免长连接绕过 HTTP 的即时鉴权。
+async fn session_still_valid(state: &AppState, session: &mut Session) -> bool {
+    let workspace = match load_workspace(state, &session.workspace_id).await {
+        Ok(workspace) => workspace,
+        Err(_) => return false,
+    };
+    if ensure_public(&workspace).is_err() {
+        return false;
+    }
+    match &session.auth {
+        SessionAuth::Owner { device } => {
+            let row: Result<Option<(Option<i64>,)>, _> =
+                sqlx::query_as("SELECT revoked_at FROM devices WHERE id = ?")
+                    .bind(device)
+                    .fetch_optional(state.private.pool())
+                    .await;
+            matches!(row, Ok(Some((None,))))
+        }
+        SessionAuth::Share { token, .. } => {
+            match revalidate_link(state, token, ShareKind::Workspace).await {
+                Ok(link) => {
+                    if link.object_id != session.workspace_id || !can_read_notes(link.note_scopes) {
+                        return false;
+                    }
+                    session.can_write = can_write_notes(link.note_scopes);
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+    }
+}
+
 async fn read_handshake(socket: &mut WebSocket) -> Result<Vec<u8>, AppError> {
     let frame = tokio::time::timeout(HANDSHAKE_TIMEOUT, socket.recv())
         .await
@@ -275,6 +347,10 @@ async fn authenticate(state: &AppState, raw: &[u8]) -> Result<Session, AppError>
                 can_write: can_write_notes(link.note_scopes),
                 frames: 0,
                 window_start: now(),
+                auth: SessionAuth::Share {
+                    token: token.to_string(),
+                    link_id: link.id.clone(),
+                },
             })
         }
         "owner" => {
@@ -315,6 +391,9 @@ async fn authenticate(state: &AppState, raw: &[u8]) -> Result<Session, AppError>
                 can_write: true,
                 frames: 0,
                 window_start: now(),
+                auth: SessionAuth::Owner {
+                    device: device.to_string(),
+                },
             })
         }
         _ => Err(AppError::Unauthorized),

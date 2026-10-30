@@ -22,6 +22,12 @@ RUN apt-get update \
 
 COPY --from=builder /src/target/release/cista-server /usr/local/bin/cista-server
 
+# Docker 没有 systemd 的 UMask=；入口脚本统一 0077，避免宿主 bind mount 里
+# shared.db（含明文标题/文件名）被同机其他用户读取。
+RUN printf '%s\n' '#!/bin/sh' 'umask 0077' 'exec /usr/local/bin/cista-server "$@"' \
+        > /usr/local/bin/cista-entrypoint \
+    && chmod 755 /usr/local/bin/cista-entrypoint
+
 ENV CISTA_BIND=0.0.0.0:8787 \
     CISTA_DATA_DIR=/data \
     CISTA_LOG_FORMAT=json
@@ -33,4 +39,4 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
     CMD curl -fsS http://127.0.0.1:8787/healthz || exit 1
 
-ENTRYPOINT ["/usr/local/bin/cista-server"]
+ENTRYPOINT ["/usr/local/bin/cista-entrypoint"]

@@ -2,7 +2,8 @@
  * 私有笔记 API（B+ 签名 + 客户端加密），桌面与 Web 共用。
  *
  * 不变量：
- * - MK 与设备私钥只存在内存（`Session`）；不写 localStorage/IndexedDB/URL。
+ * - MK 与设备私钥默认只在内存（`Session`）；原生端可显式写入系统安全存储用于自动解锁，
+ *   但绝不写 localStorage/IndexedDB/URL，也绝不发给服务端。
  * - 每次请求新 nonce + 当前时间戳；body 原始字节参与签名。
  * - `sealed.rev` 必须等于服务端将写入的 rev（AAD 绑定），所以保存前要算好。
  * - 冲突（409）不自动合并：交给调用方生成冲突副本。

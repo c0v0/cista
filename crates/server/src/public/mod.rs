@@ -14,7 +14,7 @@ use axum::http::header;
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use cista_core::share::{hash_token, is_valid_token_shape, ShareKind};
+use cista_core::share::{hash_token, is_valid_token_shape, ShareKind, MAX_PASSPHRASE_BYTES};
 use std::path::Path;
 
 use crate::error::AppError;
@@ -188,6 +188,17 @@ pub async fn load_link_for_ticket(
     Ok(link)
 }
 
+/// 长连接（WS）周期性复核：不消耗限速令牌，只检查撤销/过期/次数。
+pub async fn revalidate_link(
+    state: &AppState,
+    token: &str,
+    expected: ShareKind,
+) -> Result<Link, AppError> {
+    let link = fetch_link(state, token, expected).await?;
+    ensure_link_usable(&link, true)?;
+    Ok(link)
+}
+
 /// 有口令的链接：需要 `X-Share-Passphrase` 头。
 pub async fn require_passphrase(
     state: &AppState,
@@ -211,7 +222,7 @@ pub async fn require_passphrase_value(
         return Ok(());
     };
     let provided = provided.unwrap_or("");
-    if provided.is_empty() {
+    if provided.is_empty() || provided.len() > MAX_PASSPHRASE_BYTES {
         return Err(AppError::Unauthorized);
     }
     let hash = required_hash.to_string();

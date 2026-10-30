@@ -33,10 +33,18 @@ pub struct AppState {
     pub hash_budget: Arc<Semaphore>,
     /// 限制同时进行的私有附件流式上传（磁盘与连接占用）。
     pub upload_budget: Arc<Semaphore>,
+    /// 公网分享上传单独限并发：drop 链接面向不可信访客，不能与私有上传共用额度。
+    pub public_upload_budget: Arc<Semaphore>,
+    /// 单文件分享创建会整包读私有 blob 并加密复制；串行化避免 OOM。
+    pub link_create_budget: Arc<Semaphore>,
     /// 限制同时活跃的 `/ws` 连接。
     pub ws_budget: Arc<Semaphore>,
+    /// 限制同时处于握手阶段的 `/ws` 连接（未认证）。
+    pub ws_handshake_budget: Arc<Semaphore>,
     /// 限制同时活跃的 SSE 连接。
     pub sse_budget: Arc<Semaphore>,
+    /// 每个链接/设备的长连接计数（WS/SSE 的 per-key 上限）。
+    connections: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl AppState {
@@ -63,10 +71,31 @@ impl AppState {
             failures: Arc::new(FailureTracker::new(5, 300)),
             body_budget: Arc::new(Semaphore::new(16)),
             hash_budget: Arc::new(Semaphore::new(4)),
-            upload_budget: Arc::new(Semaphore::new(8)),
+            upload_budget: Arc::new(Semaphore::new(4)),
+            public_upload_budget: Arc::new(Semaphore::new(2)),
+            link_create_budget: Arc::new(Semaphore::new(1)),
             ws_budget: Arc::new(Semaphore::new(128)),
+            ws_handshake_budget: Arc::new(Semaphore::new(32)),
             sse_budget: Arc::new(Semaphore::new(64)),
+            connections: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// 每个 key（分享链接/设备）的长连接上限；超过返回 None。
+    pub fn acquire_connection(&self, key: &str, max: usize) -> Option<ConnectionGuard> {
+        let mut map = self
+            .connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = map.entry(key.to_string()).or_insert(0);
+        if *count >= max {
+            return None;
+        }
+        *count += 1;
+        Some(ConnectionGuard {
+            connections: Arc::clone(&self.connections),
+            key: key.to_string(),
+        })
     }
 
     pub fn data_dir(&self) -> &std::path::Path {
@@ -75,6 +104,27 @@ impl AppState {
 
     pub fn quotas(&self) -> Quotas {
         self.cfg.quotas()
+    }
+}
+
+/// 长连接守卫：Drop 时归还 per-key 计数。
+pub struct ConnectionGuard {
+    connections: Arc<Mutex<HashMap<String, usize>>>,
+    key: String,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        let mut map = self
+            .connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = map.get_mut(&self.key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                map.remove(&self.key);
+            }
+        }
     }
 }
 

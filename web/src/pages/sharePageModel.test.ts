@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ShareError } from "../lib/shareClient";
 import {
+  FILE_DROP_UPLOAD_ONLY,
   FILE_MANAGE,
   FILE_READ,
   FILE_UPLOAD,
@@ -73,5 +74,15 @@ describe("formatBytes", () => {
 
   it("非法输入返回占位符", () => {
     expect(formatBytes(-1)).toBe("—");
+  });
+});
+
+describe("drop upload links", () => {
+  it("drop 位只给上传权限，不给列目录/管理", () => {
+    expect(filePermissions(FILE_DROP_UPLOAD_ONLY)).toEqual({
+      canRead: false,
+      canUpload: true,
+      canManage: false,
+    });
   });
 });

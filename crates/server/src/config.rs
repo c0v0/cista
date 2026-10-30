@@ -47,6 +47,13 @@ impl Config {
             link_bytes: self.link_quota_bytes,
         }
     }
+
+    /// 上传前要求的最小可用空间：水位 + 所有在途上传槽位的最坏总字节
+    /// （私有 4 + 公网 2 + 单文件分享 1 + 余量 1）。
+    pub fn upload_free_floor(&self) -> u64 {
+        self.min_free_bytes
+            .saturating_add(self.max_file_bytes.saturating_mul(8))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +66,16 @@ const MIB: u64 = 1024 * 1024;
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_env_inner(true)
+    }
+
+    /// `cista-server gc` 只操作共享库/文件，不需要静态加密密钥。
+    /// 备份单元因此不必再保存一份 `CISTA_STATIC_KEY`。
+    pub fn from_env_for_gc() -> Result<Self, ConfigError> {
+        Self::from_env_inner(false)
+    }
+
+    fn from_env_inner(require_static_key: bool) -> Result<Self, ConfigError> {
         let bind: SocketAddr = std::env::var("CISTA_BIND")
             .unwrap_or_else(|_| "127.0.0.1:8787".into())
             .parse()
@@ -114,7 +131,7 @@ impl Config {
         let allow_plaintext = std::env::var("CISTA_ALLOW_PLAINTEXT")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        if static_key.is_none() && !allow_plaintext {
+        if require_static_key && static_key.is_none() && !allow_plaintext {
             return Err(ConfigError::Invalid("CISTA_STATIC_KEY"));
         }
 

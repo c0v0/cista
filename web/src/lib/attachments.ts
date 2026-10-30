@@ -83,6 +83,9 @@ export async function downloadAttachment(
   session: Session,
   attachment: NoteAttachment,
 ): Promise<Uint8Array> {
+  if (!/^[0-9a-f]{64}$/.test(attachment.hash)) {
+    throw new Error("附件 hash 非法");
+  }
   const path = `/api/files/${attachment.hash}`;
   const empty = new Uint8Array();
   const response = await fetch(`${session.apiBase}${path}`, {

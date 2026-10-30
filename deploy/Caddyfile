@@ -14,8 +14,6 @@ example.com {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
-		# SPA 只需要连自己的源；分享页要下载 blob（blob:）与内联样式。
-		Content-Security-Policy "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 		-Server
 	}
 	# 单文件上限 100 MiB + 信封开销（对 API 与上传生效；静态文件不受影响）
@@ -25,6 +23,10 @@ example.com {
 
 	# API：与路由表一一对应（crates/server/src/lib.rs）
 	handle /api/* {
+		header {
+			Content-Security-Policy "default-src 'none'; sandbox"
+			Cache-Control "no-store"
+		}
 		reverse_proxy 127.0.0.1:8787 {
 			transport http {
 				read_timeout 300s
@@ -34,14 +36,20 @@ example.com {
 	}
 	# SSE 需要立即 flush；放在 /public/* 之前，Caddy 的 handle 互斥。
 	handle /public/workspaces/events {
-		header Content-Security-Policy "default-src 'none'; sandbox"
+		header {
+			Content-Security-Policy "default-src 'none'; sandbox"
+			Cache-Control "no-store"
+		}
 		reverse_proxy 127.0.0.1:8787 {
 			flush_interval -1
 		}
 	}
 	handle /public/* {
 		# 分享面只返回 JSON 或附件：比 SPA 更严，禁止任何脚本/内联渲染。
-		header Content-Security-Policy "default-src 'none'; sandbox"
+		header {
+			Content-Security-Policy "default-src 'none'; sandbox"
+			Cache-Control "no-store"
+		}
 		reverse_proxy 127.0.0.1:8787 {
 			transport http {
 				read_timeout 300s
@@ -61,6 +69,7 @@ example.com {
 
 	# 静态 SPA：`pnpm -C web build` 的产物；未知路径回 index.html
 	handle {
+		header Content-Security-Policy "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 		root * /var/www/cista
 		try_files {path} /index.html
 		file_server

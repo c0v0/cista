@@ -121,3 +121,21 @@
 - WS/SSE 增加全局连接上限；WS 每连接 240 帧/分钟限速；无未快照更新时关闭不写快照。
 - 部署文档/配置：Caddy 2.10、Docker 默认不信任反代头（仅 compose 开启）、备份 HOME/ssh 密钥路径、
   README 安装步骤补全。
+### 第四轮审计修复（发布候选）
+- `/api` 在占用 body 预算前做设备/时间戳/nonce/签名形状预检，并把失败退避检查前移；
+  未认证慢速请求不再能饿死已签名请求。
+- 单文件分享创建串行化（`link_create_budget=1`），Argon2 移入 blocking 线程池；
+  共享副本写入移出 SQLite 事务；链接插入失败时补偿 refcount/实例配额。
+- 公网慢上传加 300s 墙钟超时与 2 并发上限；上传前要求 `水位 + 8 × 单文件上限` 可用空间。
+- 上传事务内复核工作区仍 active，归档/删除后不能再插入文件或配额。
+- `uploads` 增加稳定 `file_id`（迁移 `20261030000100`），删除文件只释放自己的链接配额。
+- `restore` 只允许 expired/quarantined/已到期 active；归档/删除会撤销工作区链接并卸载内存 Yjs 文档；
+  状态变更与清库在同一事务，堵住 purge 后打开中的 WS 再写回密文的窗口。
+- 单文件链接强制 `FILE_READ`；SSE 要求 `FILE_READ`，加每链接 4 条上限并周期复核。
+- WS 拆分握手/会话预算，增加每链接 8 / 每设备 16 条上限；撤销/过期复核缩短到 10s。
+- 票据下载先确认 blob 存在，再消费票据/次数。
+- 所有 API/分享响应 `Cache-Control: no-store`；Caddy 仅在对应 handle 内设置 CSP，避免覆盖更严格的值。
+- Docker 入口 `umask 0077`；`gc`/`reset-bootstrap` 不再要求静态密钥，备份单元无需保存第二份密钥。
+- 发布 job 缺少 GPG 密钥时失败而不是发布未签名产物；Debian 打包 job 改用固定 Node 版本 + SHA256，
+  不再 `curl | bash` NodeSource。
+- 新增 `cista-server reset-bootstrap`（SSH 运维）用于 Web 临时端/第二台设备重新配对。

@@ -17,13 +17,18 @@ use cista_core::share::{
 use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 
 use crate::error::AppError;
 use crate::public::{
-    ensure_public, load_link, load_workspace, require_passphrase, serve_blob, ShareToken,
+    ensure_public, load_link, load_workspace, require_passphrase, revalidate_link, serve_blob,
+    ShareToken,
 };
 use crate::quota;
 use crate::state::{now, AppState};
+
+/// 公网上传的墙钟上限：与私有上传一致，避免慢速连接长期占住 2 个并发槽。
+const PUBLIC_UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// `GET /public/workspaces/meta`
 pub async fn meta(
@@ -151,9 +156,21 @@ pub async fn upload(
         return Err(AppError::BadRequest("unsupported_media_type"));
     }
 
-    // 磁盘水位：低于阈值直接拒绝，避免写满卷导致 SQLite 损坏。
+    // 公网 drop/rw 链接面向不可信访客：先占全局上传并发额度，再读 body。
+    let _upload_permit = tokio::time::timeout(
+        Duration::from_secs(2),
+        state.public_upload_budget.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| AppError::RateLimited {
+        retry_after_secs: 1,
+    })?
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("public upload budget closed")))?;
+
+    // 磁盘水位：预留在途上传的完整上限，避免并发上传把卷写穿。
     if let Some(free) = crate::state::free_bytes(&state.cfg.data_dir) {
-        if free < state.cfg.min_free_bytes.max(state.cfg.max_file_bytes) {
+        let required = state.cfg.upload_free_floor();
+        if free < required {
             return Err(AppError::InsufficientStorage);
         }
     }
@@ -161,14 +178,28 @@ pub async fn upload(
     // 流式写入临时文件：内存占用与并发数无关，超限立即 413 并清理。
     let temp_path = state
         .shared
-        .blob_path(&format!(".upload-{}", crate::ids::new_id("up")));
-    let (size, blob_hash) = spool_upload(
-        body,
-        &temp_path,
-        state.cfg.max_file_bytes,
-        state.cfg.static_key.as_ref(),
+        .blob_path(&format!(".upload-{}.tmp", crate::ids::new_id("up")));
+    let spooled = tokio::time::timeout(
+        PUBLIC_UPLOAD_TIMEOUT,
+        spool_upload(
+            body,
+            &temp_path,
+            state.cfg.max_file_bytes,
+            state.cfg.static_key.as_ref(),
+        ),
     )
-    .await?;
+    .await;
+    let (size, blob_hash) = match spooled {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(error);
+        }
+        Err(_) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(AppError::RequestTimeout);
+        }
+    };
     if size == 0 {
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(AppError::BadRequest("empty_file"));
@@ -178,6 +209,22 @@ pub async fn upload(
     // 先判断物理副本是否已存在：去重时实例配额只记一次。
     let existed = tokio::fs::try_exists(&final_path).await?;
     let mut tx = state.shared.pool().begin().await?;
+    // 慢上传可能在 ensure_public 之后才结束；在写事务里再确认一次工作区仍 active。
+    // 与 purge/archive 的 SQLite 写锁配合，避免归档后重新插入文件/配额。
+    let workspace: Option<(String, Option<i64>)> =
+        sqlx::query_as("SELECT state, expires_at FROM workspaces WHERE id = ?")
+            .bind(&link.object_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let active = workspace
+        .map(|(state, expires_at)| {
+            state == "active" && expires_at.map(|expires| expires > now()).unwrap_or(true)
+        })
+        .unwrap_or(false);
+    if !active {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(AppError::Gone);
+    }
     if let Err(error) = quota::reserve(
         &mut tx,
         &link.object_id,
@@ -236,12 +283,13 @@ pub async fn upload(
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "INSERT INTO uploads (id, link_id, workspace_id, blob_hash, name, mime, size, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'complete', ?)",
+            "INSERT INTO uploads (id, link_id, workspace_id, file_id, blob_hash, name, mime, size, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'complete', ?)",
         )
         .bind(crate::ids::new_id("up"))
         .bind(&link.id)
         .bind(&link.object_id)
+        .bind(&file_id)
         .bind(&blob_hash)
         .bind(&final_name)
         .bind(&mime)
@@ -457,10 +505,11 @@ pub async fn delete(
     }
     // 工作区配额随软删释放；实例配额只在物理副本真的删除时释放（否则会与链接回收重复扣减）。
     quota::release_workspace(&mut tx, &link.object_id, u64::try_from(size).unwrap_or(0)).await?;
-    // 链接配额按 `uploads` 生命周期累计；删除文件时同步清掉对应行。
-    sqlx::query("DELETE FROM uploads WHERE workspace_id = ? AND blob_hash = ?")
+    // 链接配额按 `uploads` 生命周期累计；按稳定 file_id 只删这次文件对应的上传行。
+    // 按 blob_hash/可变文件名删除会连带清掉同内容的其他文件，导致链接配额被低估。
+    sqlx::query("DELETE FROM uploads WHERE workspace_id = ? AND file_id = ?")
         .bind(&link.object_id)
-        .bind(&blob_hash)
+        .bind(&file_id)
         .execute(&mut *tx)
         .await?;
     sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ? AND scope = 'shared'")
@@ -529,6 +578,9 @@ pub async fn events(
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
     let link = load_link(&state, &token, ShareKind::Workspace).await?;
     require_passphrase(&state, &link, &headers).await?;
+    if !can_read_files(link.file_scopes) {
+        return Err(AppError::Forbidden);
+    }
     let workspace = load_workspace(&state, &link.object_id).await?;
     ensure_public(&workspace)?;
 
@@ -540,20 +592,66 @@ pub async fn events(
             .map_err(|_| AppError::RateLimited {
                 retry_after_secs: 1,
             })?;
+    // 单个链接最多 4 条 SSE，避免一个访客占满全局 64 条。
+    let link_guard = state
+        .acquire_connection(&format!("sse:{}", link.id), 4)
+        .ok_or(AppError::RateLimited {
+            retry_after_secs: 1,
+        })?;
     let receiver = state.events.subscribe(&link.object_id);
-    let stream =
-        futures_util::stream::unfold((receiver, permit), |(mut receiver, permit)| async move {
+    let mut revalidate = tokio::time::interval(Duration::from_secs(30));
+    revalidate.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    revalidate.tick().await;
+    let stream = futures_util::stream::unfold(
+        (
+            receiver,
+            permit,
+            link_guard,
+            revalidate,
+            state.clone(),
+            token.clone(),
+            link.object_id.clone(),
+        ),
+        |(mut receiver, permit, link_guard, mut revalidate, state, token, workspace_id)| async move {
             loop {
-                match receiver.recv().await {
-                    Ok(rev) => {
-                        let event = Event::default().event("rev").data(rev.to_string());
-                        return Some((Ok(event), (receiver, permit)));
+                tokio::select! {
+                    _ = revalidate.tick() => {
+                        let valid = revalidate_link(&state, &token, ShareKind::Workspace)
+                            .await
+                            .is_ok()
+                            && load_workspace(&state, &workspace_id)
+                                .await
+                                .map(|workspace| ensure_public(&workspace).is_ok())
+                                .unwrap_or(false);
+                        if !valid {
+                            return None;
+                        }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    message = receiver.recv() => {
+                        match message {
+                            Ok(rev) => {
+                                let event = Event::default().event("rev").data(rev.to_string());
+                                return Some((
+                                    Ok(event),
+                                    (
+                                        receiver,
+                                        permit,
+                                        link_guard,
+                                        revalidate,
+                                        state,
+                                        token,
+                                        workspace_id,
+                                    ),
+                                ));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
                 }
             }
-        });
+        },
+    );
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }

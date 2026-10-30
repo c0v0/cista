@@ -276,3 +276,25 @@ async fn delete_unknown_note_is_404() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn archived_workspace_cannot_be_restored() {
+    let app = TestApp::new().await;
+    let device = app.enroll("archive-device").await;
+    let workspace = create_workspace_with(&app, &device, "blank", "已归档", None).await;
+    quarantine(&app, &workspace.id).await;
+
+    let archive_path = format!("/api/workspaces/{}/archive-complete", workspace.id);
+    let (status, body) = app
+        .send(app.signed(&device, "POST", &archive_path, b""))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let archived: WorkspaceInfo = TestApp::json(&body);
+    assert_eq!(archived.state, WorkspaceState::Archived);
+
+    let restore_path = format!("/api/workspaces/{}/restore", workspace.id);
+    let (status, _) = app
+        .send(app.signed(&device, "POST", &restore_path, b""))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "archived 是终态");
+}
