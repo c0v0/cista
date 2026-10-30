@@ -104,7 +104,7 @@ sudo -u cista /usr/local/bin/cista-server reset-bootstrap   # 清除已用标记
   gpg --verify SHA256SUMS.asc SHA256SUMS
   sha256sum -c SHA256SUMS --ignore-missing
   # 每个发布资产（deb/AppImage/exe/msi/apk/服务端二进制）都有同名 .asc
-  gpg --verify Cista_0.1.0_debian13_amd64.deb.asc Cista_0.1.0_debian13_amd64.deb
+  gpg --verify Cista_0.1.1_debian13_amd64.deb.asc Cista_0.1.1_debian13_amd64.deb
   ```
   密钥指纹见 `cista-release-public.asc`；签名由 CI 在发布 job 内用仓库 secret 完成。
 - 共享 blob 静态加密：必须设置 `CISTA_STATIC_KEY`（32 字节 hex，与其它钥匙分开托管）；

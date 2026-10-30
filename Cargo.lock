@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "cista-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "cista-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cista-core",
  "keyring",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "cista-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4440,7 +4440,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-cista-keystore"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tauri",
  "tauri-plugin",
